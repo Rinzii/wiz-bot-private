@@ -242,6 +242,40 @@ export class DashboardService {
     this.#server = null;
   }
 
+  getUrl() {
+    const basePath = this.#normalizeBasePath(this.#config.basePath);
+    const protocol = this.#config.secureCookies === true ? "https" : "http";
+    const fallback = this.#buildDashboardUrl({
+      hostname: "localhost",
+      port: this.#config.port,
+      basePath,
+      protocol
+    });
+
+    if (!this.#server) return fallback;
+
+    const address = this.#server.address();
+    if (!address) return fallback;
+
+    if (typeof address === "string") {
+      try {
+        return new URL(basePath, address).toString();
+      } catch {
+        return fallback;
+      }
+    }
+
+    const hostname = this.#formatHostname(address.address);
+    const port = address.port ?? this.#config.port;
+
+    return this.#buildDashboardUrl({
+      hostname,
+      port,
+      basePath,
+      protocol
+    }) ?? fallback;
+  }
+
   #normalizeConfig(config) {
     const normalized = {
       enabled: true,
@@ -289,6 +323,35 @@ export class DashboardService {
 
     normalized.basePath = this.#normalizeBasePath(normalized.basePath);
     return normalized;
+  }
+
+  #buildDashboardUrl({ hostname, port, basePath, protocol }) {
+    const sanitizedHostname = typeof hostname === "string" && hostname.length > 0 ? hostname : "localhost";
+    const origin = port
+      ? `${protocol}://${sanitizedHostname}:${port}`
+      : `${protocol}://${sanitizedHostname}`;
+
+    try {
+      return new URL(basePath || "/", origin).toString();
+    } catch {
+      const suffix = !basePath || basePath === "/" ? "/" : basePath;
+      return `${origin}${suffix}`;
+    }
+  }
+
+  #formatHostname(address) {
+    if (!address || address === "::" || address === "0.0.0.0") {
+      return "localhost";
+    }
+
+    const mappedIpv4 = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : null;
+    if (mappedIpv4) return mappedIpv4;
+
+    if (address.includes(":")) {
+      return `[${address}]`;
+    }
+
+    return address;
   }
 
   #normalizeBasePath(basePath) {

@@ -42,14 +42,14 @@ const getOpenPort = () =>
     server.on("error", reject);
   });
 
-async function createService({ username = "admin", passwordHash }) {
+async function createService({ username = "admin", passwordHash, basePath = "/" }) {
   const logger = createLogger();
   const port = await getOpenPort();
   const service = new DashboardService({
     config: {
       enabled: true,
       port,
-      basePath: "/",
+      basePath,
       username,
       passwordHash,
       sessionSecret: "test-secret",
@@ -102,4 +102,15 @@ test("dashboard login falls back to constant-time comparison when password hash 
 
   const warning = logger.entries.warn.find((entry) => entry.event === "dashboard.password_hash.unhashed");
   assert.ok(warning, "expected plaintext password warning to be logged");
+});
+
+test("dashboard exposes a clickable url", async (t) => {
+  const hash = await bcrypt.hash("s3cret", 4);
+  const basePath = "/control";
+  const { service, port } = await createService({ passwordHash: hash, basePath });
+  t.after(async () => {
+    await service.stop();
+  });
+
+  assert.equal(service.getUrl(), `http://localhost:${port}${basePath}`);
 });
