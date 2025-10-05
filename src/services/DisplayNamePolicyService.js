@@ -54,7 +54,7 @@ export function normalizeName(nick, username) {
       return trimmed.slice(0, 32);
     }
   }
-  return "Monke";
+  return "User";
 }
 
 export function hasShouting(nick) {
