@@ -1,14 +1,12 @@
 {
-  "discord": {
-    "token": "YOUR_BOT_TOKEN",
-    "clientId": "YOUR_APP_CLIENT_ID",
-    "devGuildIds": ["123456789012345678"]
-  },
-  "mongo": { "uri": "mongodb://localhost:27017/discord_modbot" },
+  "token": "YOUR_BOT_TOKEN",
+  "clientId": "YOUR_APP_CLIENT_ID",
+  "devGuildIds": ["123456789012345678"],
+  "mongoUri": "mongodb://localhost:27017/discord_modbot",
   "privateModuleDirs": ["modules/bot-private"],
   "modLogChannelId": "123456789012345678",
   "channels": {
-    "staff_member_log": "123456789012345678"
+    "staffMemberLogId": "123456789012345678"
   },
   "brandNew": {
     "enabled": true,
@@ -18,7 +16,7 @@
   "colors": {
     "green": "0x57F287",
     "red": "0xED4245",
-    "default": "0x5865F2"
+    "neutral": "0x5865F2"
   },
   "fileScanner": {
     "enabled": true,

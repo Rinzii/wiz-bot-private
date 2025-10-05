@@ -1,4 +1,4 @@
-export async function resolveStaffChannel(guild, channelMapService, preferredKeys, fallbackId) {
+export async function resolveStaffChannel(guild, channelMapService, preferredKeys, fallback) {
   if (!guild || !channelMapService) return null;
 
   const seen = new Set();
@@ -26,6 +26,19 @@ export async function resolveStaffChannel(guild, channelMapService, preferredKey
       // ignore lookup errors
     }
   }
+
+  const fallbackId = await (async () => {
+    if (typeof fallback === "function") {
+      try {
+        const resolved = await fallback(guild);
+        return typeof resolved === "string" ? resolved : null;
+      } catch {
+        return null;
+      }
+    }
+    if (typeof fallback === "string") return fallback;
+    return null;
+  })();
 
   if (fallbackId) {
     const fallbackChannel = await tryFetch(fallbackId);

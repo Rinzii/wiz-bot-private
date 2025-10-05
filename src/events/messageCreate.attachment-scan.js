@@ -189,6 +189,7 @@ export default {
 
       const logger = container.get(TOKENS.Logger);
       const cms = container.get(TOKENS.ChannelMapService);
+      const guildConfigService = container.get(TOKENS.GuildConfigService);
       const vtService = container.get(TOKENS.VirusTotalService);
 
       const attachments = Array.from(message.attachments.values());
@@ -206,18 +207,24 @@ export default {
       const archiveHits = scanned.filter((entry) => entry.classification.kind === "archive");
       if (!executableHits.length && !archiveHits.length) return;
 
+      const fallbackResolver = async (guild) => {
+        if (!guild?.id) return CONFIG.modLogChannelId || "";
+        const dynamicId = await guildConfigService.getModLogChannelId(guild.id);
+        return dynamicId || CONFIG.modLogChannelId || "";
+      };
+
       const staffFlagChannel = await resolveStaffChannel(
         message.guild,
         cms,
         fileScannerCfg.staffFlagChannelKey,
-        CONFIG.modLogChannelId
+        fallbackResolver
       );
 
       const staffActionChannel = await resolveStaffChannel(
         message.guild,
         cms,
         fileScannerCfg.staffActionChannelKey,
-        CONFIG.modLogChannelId
+        fallbackResolver
       );
 
       const flaggedEntries = [...executableHits, ...archiveHits];
