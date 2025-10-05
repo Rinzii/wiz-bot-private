@@ -15,8 +15,11 @@ export const TOKENS = {
   ModerationLogService: "ModerationLogService",
   ChannelMapService: "ChannelMapService",
   StaffRoleService: "StaffRoleService",
+  StaffMemberLogService: "StaffMemberLogService",
   AntiSpamService: "AntiSpamService",
   RuntimeModerationState: "RuntimeModerationState",
   VirusTotalService: "VirusTotalService",
-  MentionTrackerService: "MentionTrackerService"
+  MentionTrackerService: "MentionTrackerService",
+  AllowedInviteService: "AllowedInviteService",
+  VirusTotalService: "VirusTotalService"
 };

@@ -7,11 +7,18 @@
   "mongo": { "uri": "mongodb://localhost:27017/discord_modbot" },
   "privateModuleDirs": ["modules/bot-private"],
   "modLogChannelId": "123456789012345678",
+  "channels": {
+    "staff_member_log": "123456789012345678"
+  },
   "brandNew": {
     "enabled": true,
     "thresholdMs": 1800000,
     "alertChannelId": "123456789012345678"
   },
+  "colors": {
+    "green": "0x57F287",
+    "red": "0xED4245",
+    "default": "0x5865F2"
   "fileScanner": {
     "enabled": true,
     "prefixBytes": 512,
@@ -38,5 +45,11 @@
     "msgMaxInWindow": 10,
     "linkWindowMs": 45000,
     "linkMaxInWindow": 6
+  },
+  "channels": {
+    "staff_action_log": "123456789012345678"
+  },
+  "colors": {
+    "alert_color": "#F05A66"
   }
 }
