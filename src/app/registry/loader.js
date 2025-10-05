@@ -1,3 +1,4 @@
+import asyncLib from "async";
 import { readdirSync } from "node:fs";
 import { join, resolve, extname } from "node:path";
 import { validateMeta, logMetaWarning } from "./commandMeta.js";
@@ -18,10 +19,14 @@ export async function walkFiles(root, exts = [".js"]) {
 export async function loadDirCommands(root, registryMap) {
   try {
     const files = await walkFiles(root, [".js"]);
-    for (const file of files) {
+    const concurrency = (() => {
+      const parsed = Number.parseInt(process.env.COMMAND_IMPORT_CONCURRENCY ?? "", 10);
+      return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
+    })();
+    await asyncLib.eachLimit(files, concurrency, async (file) => {
       const mod = await import(`file://${resolve(file)}`).catch(() => null);
       const def = mod?.default;
-      if (!def?.data) continue;
+      if (!def?.data) return;
 
       // Validate META (warn only). /help will ignore commands without meta.
       if (!def.meta) {
@@ -32,7 +37,7 @@ export async function loadDirCommands(root, registryMap) {
       }
 
       registryMap.set(def.data.name, def);
-    }
+    });
   } catch (e) {
     console.error("Command load error:", e);
     throw e;
@@ -42,13 +47,17 @@ export async function loadDirCommands(root, registryMap) {
 /** Load event modules from a directory and bind them to the client. */
 export async function loadDirEvents(root, client) {
   const files = await walkFiles(root, [".js"]);
-  for (const file of files) {
+  const concurrency = (() => {
+    const parsed = Number.parseInt(process.env.EVENT_IMPORT_CONCURRENCY ?? "", 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
+  })();
+  await asyncLib.eachLimit(files, concurrency, async (file) => {
     const mod = await import(`file://${resolve(file)}`).catch(() => null);
     const def = mod?.default;
-    if (!def?.name || typeof def.execute !== "function") continue;
+    if (!def?.name || typeof def.execute !== "function") return;
     if (def.once) client.once(def.name, (...args) => def.execute(...args));
     else client.on(def.name, (...args) => def.execute(...args));
-  }
+  });
 }
 
 /**

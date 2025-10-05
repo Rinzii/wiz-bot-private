@@ -1,3 +1,5 @@
+import asyncLib from "async";
+import chalk from "chalk";
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,43 +55,47 @@ async function main() {
   const roots = discoverCommandRoots();
 
   const problems = [];
+  const concurrency = (() => {
+    const parsed = Number.parseInt(process.env.COMMAND_CHECK_CONCURRENCY ?? "", 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
+  })();
   for (const root of roots) {
     const files = walkFiles(root, [".js"]);
-    for (const file of files) {
+    await asyncLib.eachLimit(files, concurrency, async (file) => {
       // Import the command module only (NOT any plugin index / bot entrypoints)
       let mod;
       try {
         mod = await import(pathToFileURL(file).href);
       } catch (e) {
         problems.push({ name: "(unknown)", file, issue: `failed to import: ${e?.message || e}` });
-        continue;
+        return;
       }
       const def = mod?.default;
-      if (!def?.data) continue; // not a slash-command module
+      if (!def?.data) return; // not a slash-command module
 
       const name = def.data?.name || "(unknown)";
 
       if (!def.meta) {
         problems.push({ name, file, issue: "MISSING meta" });
-        continue;
+        return;
       }
       const errs = validateMeta(def.meta);
       if (errs.length) problems.push({ name, file, issue: `INVALID: ${errs.join("; ")}` });
-    }
+    });
   }
 
   if (problems.length === 0) {
-    console.log("✅ All commands with builders have valid meta (nothing missing).");
+    console.log(chalk.green("✅ All commands with builders have valid meta (nothing missing)."));
     return;
   }
 
   const w1 = Math.max(...problems.map(r => r.name.length), 8);
-  console.log(`${pad("Command", w1)}  Issue  File`);
-  console.log("-".repeat(100));
+  console.log(chalk.bold(`${pad("Command", w1)}  Issue  File`));
+  console.log(chalk.gray("-".repeat(100)));
   for (const r of problems) {
-    console.log(`${pad(r.name, w1)}  ${r.issue}  ${r.file}`);
+    console.log(`${pad(r.name, w1)}  ${chalk.red(r.issue)}  ${chalk.gray(r.file)}`);
   }
   process.exitCode = 1; // fail CI if any problems
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => { console.error(chalk.red(e)); process.exit(1); });
