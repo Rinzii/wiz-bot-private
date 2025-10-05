@@ -17,6 +17,7 @@ import { StaffMemberLogService } from "./services/StaffMemberLogService.js";
 import { AllowedInviteService } from "./services/AllowedInviteService.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
 import { MentionTrackerService } from "./services/MentionTrackerService.js";
+import { DisplayNamePolicyService } from "./services/DisplayNamePolicyService.js";
 
 async function main() {
   await connectMongo();
@@ -69,6 +70,12 @@ async function main() {
     fallbackChannelId: CONFIG.modLogChannelId
   });
   container.set(TOKENS.MentionTrackerService, mentionTrackerService);
+
+  const displayNamePolicyService = new DisplayNamePolicyService({
+    logger,
+    sweepIntervalMinutes: CONFIG.displayNamePolicy?.sweepIntervalMinutes ?? 60
+  });
+  container.set(TOKENS.DisplayNamePolicyService, displayNamePolicyService);
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));

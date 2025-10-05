@@ -114,6 +114,10 @@ const mentionTrackerDefaults = {
   additionalFlagChannelKeys: []
 };
 const mentionTrackerFileCfg = fileCfg?.mentionTracker || {};
+const displayNamePolicyDefaults = {
+  sweepIntervalMinutes: 60
+};
+const displayNamePolicyFileCfg = fileCfg?.displayNamePolicy || {};
 
 const mentionTrackerRoleRaw = process.env.MENTION_TRACKER_ROLE_IDS !== undefined
   ? process.env.MENTION_TRACKER_ROLE_IDS
@@ -177,6 +181,15 @@ export const CONFIG = {
     trackedRoleIds: toList(mentionTrackerRoleRaw),
     trackedUserIds: toList(mentionTrackerUserRaw),
     additionalFlagChannelKeys: toList(mentionTrackerExtraKeysRaw)
+  },
+  displayNamePolicy: {
+    sweepIntervalMinutes: toNumber(
+      envOr(
+        "DISPLAY_NAME_SWEEP_INTERVAL_MINUTES",
+        displayNamePolicyFileCfg.sweepIntervalMinutes ?? displayNamePolicyDefaults.sweepIntervalMinutes
+      ),
+      displayNamePolicyDefaults.sweepIntervalMinutes
+    )
   }
 };
 
