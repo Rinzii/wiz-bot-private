@@ -3034,11 +3034,13 @@ export class DashboardService {
         const data = await res.json();
         if (data.authenticated) {
           setAuthenticated(true, data.username || '');
-        } else {
+        } else if (!isAuthenticated) {
           setAuthenticated(false, '');
         }
       } catch {
-        setAuthenticated(false, '');
+        if (!isAuthenticated) {
+          setAuthenticated(false, '');
+        }
       }
     }
 
