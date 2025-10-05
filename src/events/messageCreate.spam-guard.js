@@ -64,7 +64,14 @@ export default {
     };
 
     try {
-      await moderationService.ban(member, `[Auto-ban] ${reason}`);
+      await moderationService.ban({
+        guild: message.guild,
+        target: member,
+        moderator: message.client.user,
+        reason: `[Auto-ban] ${reason}`,
+        durationMs: null,
+        metadata: { source: "antispam", messageId: message.id }
+      });
       antiSpamService.clear(message.guildId, message.author.id);
       logger?.warn?.("antispam.autoban", meta);
     } catch (err) {

@@ -12,6 +12,7 @@ export const TOKENS = {
   DebugState: "DebugState",
   WarningService: "WarningService",
   ModerationService: "ModerationService",
+  ModerationLogService: "ModerationLogService",
   ChannelMapService: "ChannelMapService",
   StaffRoleService: "StaffRoleService",
   AntiSpamService: "AntiSpamService"
