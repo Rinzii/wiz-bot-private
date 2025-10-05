@@ -13,6 +13,26 @@
     "thresholdMs": 1800000,
     "alertChannelId": "123456789012345678"
   },
+  "privateDashboard": {
+    "enabled": true,
+    "port": 3080,
+    "basePath": "/",
+    "guildAllowList": [],
+    "username": "admin",
+    "passwordHash": "$2a$12$replace_with_hash",
+    "sessionSecret": "replace-with-random-secret",
+    "secureCookies": true,
+    "trustProxy": false,
+    "rateLimit": {
+      "windowMs": 60000,
+      "max": 100
+    },
+    "loginRateLimit": {
+      "windowMs": 900000,
+      "max": 10
+    },
+    "sessionMaxAgeMs": 3600000
+  },
   "colors": {
     "green": "0x57F287",
     "red": "0xED4245",

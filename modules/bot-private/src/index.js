@@ -28,6 +28,7 @@ export default {
         const { AntiRaidService } = await import("./services/AntiRaidService.js");
         const { MemberTracker } = await import("./services/MemberTracker.js");
         const { BrandNewAccountWatcher } = await import("./services/BrandNewAccountWatcher.js");
+        const { DashboardService } = await import("./services/DashboardService.js");
 
         // Resolve the host project's src/ directory relative to this plugin.
         const rootSrc = resolve(__dirname, "../../..", "src");
@@ -35,6 +36,8 @@ export default {
         const { CONFIG } = await import(fromSrc("config.js"));
         const { TOKENS } = await import(fromSrc("container.js"));
         const { formatDuration } = await import(fromSrc("utils/time.js"));
+        const { WarningModel } = await import(fromSrc("db/models/Warning.js"));
+        const { ModerationActionModel } = await import(fromSrc("db/models/ModerationAction.js"));
 
         const guildConfigService = container.get(TOKENS.GuildConfigService);
         const cms = container.get(TOKENS.ChannelMapService);
@@ -117,6 +120,23 @@ export default {
         container.set(PRIVATE_TOKENS.MemberTracker, tracker);
         container.set(PRIVATE_TOKENS.BrandNewAccountWatcher, brandNewWatcher);
         container.set(PRIVATE_TOKENS.AntiRaidService, new AntiRaidService(getModLog, 10));
+
+        const dashboardService = new DashboardService({
+          config: CONFIG.privateDashboard,
+          logger,
+          warningModel: WarningModel,
+          moderationActionModel: ModerationActionModel
+        });
+
+        try {
+          await dashboardService.start();
+          logger?.info?.("dashboard.ready", { port: CONFIG.privateDashboard?.port });
+        } catch (error) {
+          logger?.error?.("dashboard.failed_to_start", { error: String(error?.message || error) });
+        }
+
+        container.set(PRIVATE_TOKENS.DashboardService, dashboardService);
+        container.set(TOKENS.DashboardService, dashboardService);
       }
     };
   }

@@ -101,6 +101,15 @@ async function main() {
   client.container = container;
   client.commands = new Map();
 
+  if (container.has(TOKENS.DashboardService)) {
+    try {
+      const dashboardService = container.get(TOKENS.DashboardService);
+      dashboardService?.setClient?.(client);
+    } catch (error) {
+      logger?.error?.("dashboard.attach_failed", { error: String(error?.message || error) });
+    }
+  }
+
   moderationService.setClient(client);
 
   // Commands
