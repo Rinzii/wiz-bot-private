@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file=.env src/index.js",
-    "deploy": "node --env-file=.env scripts/deploy-commands.js",
-    "start": "node src/index.js",
-    "check:commands": "node scripts/check-commands.js",
+    "dev": "node --env-file=.env src/app/index.js",
+    "deploy": "node --env-file=.env tools/cli/deploy-commands.js",
+    "start": "node src/app/index.js",
+    "check:commands": "node tools/cli/check-commands.js",
     "test": "node --test",
     "lint": "eslint ."
   },
