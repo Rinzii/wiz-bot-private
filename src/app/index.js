@@ -101,10 +101,10 @@ async function main() {
   client.container = container;
   client.commands = new Map();
 
-  if (container.has(TOKENS.DashboardService)) {
+  const dashboardService = container.getOptional(TOKENS.DashboardService);
+  if (dashboardService) {
     try {
-      const dashboardService = container.get(TOKENS.DashboardService);
-      dashboardService?.setClient?.(client);
+      dashboardService.setClient?.(client);
     } catch (error) {
       logger?.error?.("dashboard.attach_failed", { error: String(error?.message || error) });
     }
