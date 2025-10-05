@@ -7,6 +7,4 @@ const ModerationCounterSchema = new Schema({
   lastCaseNumber: { type: Number, default: 0 }
 });
 
-ModerationCounterSchema.index({ guildId: 1 }, { unique: true });
-
 export const ModerationCounterModel = model("ModerationCounter", ModerationCounterSchema);

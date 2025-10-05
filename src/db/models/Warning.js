@@ -2,8 +2,8 @@ import mongoose from "mongoose";
 const { Schema, model } = mongoose;
 
 const WarningSchema = new Schema({
-  guildId: { type: String, required: true, index: true },
-  userId:  { type: String, required: true, index: true },
+  guildId: { type: String, required: true },
+  userId:  { type: String, required: true },
   modId:   { type: String, required: true },
   reason:  { type: String, default: "No reason provided." }
 }, { timestamps: true });

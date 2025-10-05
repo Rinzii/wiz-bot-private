@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 const { Schema, model } = mongoose;
 
 const ChannelMapSchema = new Schema({
-  guildId:   { type: String, required: true, index: true },
+  guildId:   { type: String, required: true },
   key:       { type: String, required: true },
   channelId: { type: String, required: true },
   note:      { type: String, default: "" }
