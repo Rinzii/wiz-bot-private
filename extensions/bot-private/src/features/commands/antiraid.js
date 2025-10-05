@@ -1,6 +1,6 @@
 import { PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from "discord.js";
 import { PRIVATE_TOKENS } from "../../domain/services/tokens.js";
-import { infoEmbed } from "../../../../src/shared/utils/embeds.js";
+import { infoEmbed } from "../../../../../src/shared/utils/embeds.js";
 
 const svc = (ix) => ix.client.container.get(PRIVATE_TOKENS.AntiRaidService);
 
