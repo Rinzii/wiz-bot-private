@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PRIVATE_TOKENS } from "./domain/services/tokens.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -24,23 +24,23 @@ export default {
       commandDirs: [resolve(__dirname, "features", "commands")],
       eventDirs:   [resolve(__dirname, "features", "events")],
 
-      async register(container) {
+      async register(container, context) {
         const { AntiRaidService } = await import("./domain/services/AntiRaidService.js");
         const { MemberTracker } = await import("./domain/services/MemberTracker.js");
         const { BrandNewAccountWatcher } = await import("./domain/services/BrandNewAccountWatcher.js");
         const { DashboardService } = await import("./domain/services/DashboardService.js");
 
-        // Resolve the host project's src/ directory relative to this plugin.
-        const rootSrc = resolve(__dirname, "../../..", "src");
-        const fromSrc = (rel) => pathToFileURL(resolve(rootSrc, rel)).href;
-        const { CONFIG } = await import(fromSrc("config/index.js"));
-        const { TOKENS } = await import(fromSrc("app/container/index.js"));
-        const { formatDuration } = await import(fromSrc("shared/utils/time.js"));
-        const { WarningModel } = await import(fromSrc("infrastructure/database/models/Warning.js"));
-        const { ModerationActionModel } = await import(fromSrc("infrastructure/database/models/ModerationAction.js"));
+        const config = context?.config;
+        const tokens = context?.tokens;
+        const formatDuration = context?.helpers?.formatDuration;
+        const { WarningModel, ModerationActionModel } = context?.models || {};
 
-        const guildConfigService = container.get(TOKENS.GuildConfigService);
-        const cms = container.get(TOKENS.ChannelMapService);
+        if (!config || !tokens || !formatDuration || !WarningModel || !ModerationActionModel) {
+          throw new Error("bot-private plugin requires host context with config, tokens, helpers.formatDuration, and models");
+        }
+
+        const guildConfigService = container.get(tokens.GuildConfigService);
+        const cms = container.get(tokens.ChannelMapService);
 
         const getModLog = async (g) => {
           try {
@@ -56,17 +56,17 @@ export default {
                 if (dynamic) id = dynamic;
               } catch {/* ignore */}
             }
-            const finalId = id || CONFIG.modLogChannelId;
+            const finalId = id || config.modLogChannelId;
             if (!finalId) return null;
             const ch = g.channels.cache.get(finalId) ?? await g.channels.fetch(finalId).catch(() => null);
             return (ch && ch.isTextBased?.() && ch.type === 0) ? ch : null;
           } catch { return null; }
         };
 
-        const logger = container.get(TOKENS.Logger);
+        const logger = container.get(tokens.Logger);
 
         const tracker = new MemberTracker({ logger });
-        const brandNewCfg = CONFIG.brandNew || {};
+        const brandNewCfg = config.brandNew || {};
         const brandNewChannelKeys = ["brand_new_alert", "member_log", "join_boost_log", "bot_log", "action_log", "mod_log"];
 
         const resolveAlertChannel = async (guild) => {
@@ -94,7 +94,7 @@ export default {
             const dynamic = await guildConfigService.getModLogChannelId(guild.id);
             if (dynamic) fallbackIds.push(dynamic);
           } catch {/* ignore */}
-          if (CONFIG.modLogChannelId) fallbackIds.push(CONFIG.modLogChannelId);
+          if (config.modLogChannelId) fallbackIds.push(config.modLogChannelId);
 
           for (const fallbackId of fallbackIds) {
             const fallback = await tryFetch(fallbackId);
@@ -110,7 +110,7 @@ export default {
           enabled: brandNewCfg.enabled,
           formatDuration,
           colorResolver: (key) => {
-            if (key === "alert") return CONFIG.colors?.alert ?? null;
+            if (key === "alert") return config.colors?.alert ?? null;
             return null;
           },
         });
@@ -122,7 +122,7 @@ export default {
         container.set(PRIVATE_TOKENS.AntiRaidService, new AntiRaidService(getModLog, 10));
 
         const dashboardService = new DashboardService({
-          config: CONFIG.privateDashboard,
+          config: config.privateDashboard,
           logger,
           warningModel: WarningModel,
           moderationActionModel: ModerationActionModel
@@ -130,13 +130,13 @@ export default {
 
         try {
           await dashboardService.start();
-          logger?.info?.("dashboard.ready", { port: CONFIG.privateDashboard?.port });
+          logger?.info?.("dashboard.ready", { port: config.privateDashboard?.port });
         } catch (error) {
           logger?.error?.("dashboard.failed_to_start", { error: String(error?.message || error) });
         }
 
         container.set(PRIVATE_TOKENS.DashboardService, dashboardService);
-        container.set(TOKENS.DashboardService, dashboardService);
+        container.set(tokens.DashboardService, dashboardService);
       }
     };
   }
