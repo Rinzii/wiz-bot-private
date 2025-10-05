@@ -13,6 +13,7 @@ import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
 import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
+import { AllowedInviteService } from "./services/AllowedInviteService.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
 
 async function main() {
@@ -40,6 +41,15 @@ async function main() {
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
+  const allowedInviteService = new AllowedInviteService();
+  container.set(TOKENS.AllowedInviteService, allowedInviteService);
+
+  try {
+    const count = await allowedInviteService.loadAll();
+    logger?.info?.("invite_guard.allowlist_preload", { count });
+  } catch (err) {
+    logger?.error?.("invite_guard.allowlist_preload_failed", { error: String(err?.message || err) });
+  }
   container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
 
   // Plugins
