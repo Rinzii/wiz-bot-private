@@ -1135,14 +1135,14 @@ export class DashboardService {
         const channelsCell = document.createElement('td');
         const counts = guild.channelCounts || {};
         const breakdown = [];
-        if (counts.text) breakdown.push(`${formatNumber(counts.text)} text`);
-        if (counts.voice) breakdown.push(`${formatNumber(counts.voice)} voice`);
-        if (counts.forum) breakdown.push(`${formatNumber(counts.forum)} forum`);
-        if (counts.stage) breakdown.push(`${formatNumber(counts.stage)} stage`);
-        if (counts.announcement) breakdown.push(`${formatNumber(counts.announcement)} announcement`);
-        if (counts.thread) breakdown.push(`${formatNumber(counts.thread)} thread`);
-        if (counts.category) breakdown.push(`${formatNumber(counts.category)} category`);
-        const channelSummary = formatNumber(counts.total) + (breakdown.length ? ` (${breakdown.join(', ')})` : '');
+        if (counts.text) breakdown.push(formatNumber(counts.text) + ' text');
+        if (counts.voice) breakdown.push(formatNumber(counts.voice) + ' voice');
+        if (counts.forum) breakdown.push(formatNumber(counts.forum) + ' forum');
+        if (counts.stage) breakdown.push(formatNumber(counts.stage) + ' stage');
+        if (counts.announcement) breakdown.push(formatNumber(counts.announcement) + ' announcement');
+        if (counts.thread) breakdown.push(formatNumber(counts.thread) + ' thread');
+        if (counts.category) breakdown.push(formatNumber(counts.category) + ' category');
+        const channelSummary = formatNumber(counts.total) + (breakdown.length ? ' (' + breakdown.join(', ') + ')' : '');
         channelsCell.textContent = channelSummary;
         tr.appendChild(channelsCell);
 
@@ -1152,15 +1152,15 @@ export class DashboardService {
 
         const emojiCell = document.createElement('td');
         const emojiParts = [];
-        emojiParts.push(`${formatNumber(guild.emojiCount)} emoji`);
-        emojiParts.push(`${formatNumber(guild.stickerCount)} stickers`);
+        emojiParts.push(formatNumber(guild.emojiCount) + ' emoji');
+        emojiParts.push(formatNumber(guild.stickerCount) + ' stickers');
         emojiCell.textContent = emojiParts.join(', ');
         tr.appendChild(emojiCell);
 
         const boostCell = document.createElement('td');
         const tier = typeof guild.boostLevel === 'number' ? guild.boostLevel : null;
         const boostValue = formatNumber(guild.boostCount);
-        boostCell.textContent = tier !== null ? `${boostValue} (Tier ${tier})` : boostValue;
+        boostCell.textContent = tier !== null ? boostValue + ' (Tier ' + tier + ')' : boostValue;
         tr.appendChild(boostCell);
 
         guildStatsBody.appendChild(tr);
