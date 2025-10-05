@@ -76,6 +76,10 @@ web_modules/
 config.json
 !default.config.json
 
+# Local configuration layers
+config/*.jsonc
+!config/*.example.jsonc
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
