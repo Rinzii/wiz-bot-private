@@ -1,18 +1,12 @@
+import asyncLib from "async";
+import chalk from "chalk";
 import { readdirSync } from "node:fs";
 import { join, resolve, extname } from "node:path";
 import { validateMeta, logMetaWarning } from "./commandMeta.js";
 
-async function eachLimit(iterable, limit, iterator) {
-  const max = Number.isInteger(limit) && limit > 0 ? limit : 1;
-  const executing = new Set();
-  for (const item of iterable) {
-    const p = (async () => iterator(item))();
-    executing.add(p);
-    const remove = () => executing.delete(p);
-    p.then(remove, remove);
-    if (executing.size >= max) await Promise.race(executing);
-  }
-  await Promise.all(executing);
+function parseConcurrency(value, fallback) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 /** Recursively list files by extension. */
@@ -31,18 +25,15 @@ export async function walkFiles(root, exts = [".js"]) {
 export async function loadDirCommands(root, registryMap) {
   try {
     const files = await walkFiles(root, [".js"]);
-    const concurrency = (() => {
-      const parsed = Number.parseInt(process.env.COMMAND_IMPORT_CONCURRENCY ?? "", 10);
-      return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
-    })();
-    await eachLimit(files, concurrency, async (file) => {
+    const concurrency = parseConcurrency(process.env.COMMAND_IMPORT_CONCURRENCY, 4);
+    await asyncLib.eachLimit(files, concurrency, async (file) => {
       const mod = await import(`file://${resolve(file)}`).catch(() => null);
       const def = mod?.default;
       if (!def?.data) return;
 
       // Validate META (warn only). /help will ignore commands without meta.
       if (!def.meta) {
-        console.warn(`[meta] ${file} — missing meta (command will be hidden from /help)`);
+        console.warn(chalk.yellow(`[meta] ${file} — missing meta (command will be hidden from /help)`));
       } else {
         const errs = validateMeta(def.meta, file);
         if (errs.length) logMetaWarning(file, errs);
@@ -51,7 +42,7 @@ export async function loadDirCommands(root, registryMap) {
       registryMap.set(def.data.name, def);
     });
   } catch (e) {
-    console.error("Command load error:", e);
+    console.error(chalk.red("Command load error:"), e);
     throw e;
   }
 }
@@ -59,11 +50,8 @@ export async function loadDirCommands(root, registryMap) {
 /** Load event modules from a directory and bind them to the client. */
 export async function loadDirEvents(root, client) {
   const files = await walkFiles(root, [".js"]);
-  const concurrency = (() => {
-    const parsed = Number.parseInt(process.env.EVENT_IMPORT_CONCURRENCY ?? "", 10);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
-  })();
-  await eachLimit(files, concurrency, async (file) => {
+  const concurrency = parseConcurrency(process.env.EVENT_IMPORT_CONCURRENCY, 4);
+  await asyncLib.eachLimit(files, concurrency, async (file) => {
     const mod = await import(`file://${resolve(file)}`).catch(() => null);
     const def = mod?.default;
     if (!def?.name || typeof def.execute !== "function") return;
@@ -77,17 +65,23 @@ export async function loadDirEvents(root, client) {
  * Each plugin should export default { meta, setup() { return { commandDirs, eventDirs, intents, partials, register(container) } } }
  */
 export async function loadPlugins(pluginDirs = []) {
-  const regs = [];
-  for (const dir of pluginDirs) {
+  const concurrency = parseConcurrency(process.env.PLUGIN_IMPORT_CONCURRENCY, 2);
+  const loader = async (dir) => {
     // Try <dir>/src/index.js then <dir>/index.js
     const tryFiles = [resolve(dir, "src/index.js"), resolve(dir, "index.js"), dir];
     let mod = null;
     for (const f of tryFiles) {
-      try { mod = await import(`file://${f}`); } catch { mod = null; }
+      try {
+        mod = await import(`file://${f}`);
+      } catch (err) {
+        mod = null;
+        if (err?.code && ["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND"].includes(err.code)) continue;
+        console.warn(chalk.gray(`Skipping candidate ${f}: ${err?.message || err}`));
+      }
       if (mod) break;
     }
     const entry = mod?.default;
-    if (!entry?.setup) continue;
+    if (!entry?.setup) return null;
 
     const reg = await entry.setup();
     // normalize
@@ -95,7 +89,9 @@ export async function loadPlugins(pluginDirs = []) {
     reg.eventDirs = reg.eventDirs || [];
     reg.intents = reg.intents || [];
     reg.partials = reg.partials || [];
-    regs.push(reg);
-  }
-  return regs;
+    return reg;
+  };
+
+  const results = await asyncLib.mapLimit(pluginDirs, concurrency, loader);
+  return results.filter(Boolean);
 }
