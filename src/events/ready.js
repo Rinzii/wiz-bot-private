@@ -23,5 +23,14 @@ export default {
         error: String(err?.message || err)
       });
     }
+
+    try {
+      const displayNamePolicyService = client.container.get(TOKENS.DisplayNamePolicyService);
+      await displayNamePolicyService.onClientReady(client);
+    } catch (err) {
+      client.container.get(TOKENS.Logger)?.error?.("display_name_policy.ready_failed", {
+        error: String(err?.message || err)
+      });
+    }
   }
 };
