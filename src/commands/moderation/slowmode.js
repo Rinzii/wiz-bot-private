@@ -15,8 +15,8 @@ export default {
     .addSubcommand(s => s
       .setName("set")
       .setDescription("Enable slowmode")
-      .addChannelOption(o => o.setName("channel").setDescription("Channel").addChannelTypes(ChannelType.GuildText))
-      .addIntegerOption(o => o.setName("seconds").setDescription("Slowmode duration").setRequired(true).setMinValue(1).setMaxValue(21600)))
+      .addIntegerOption(o => o.setName("seconds").setDescription("Slowmode duration").setRequired(true).setMinValue(1).setMaxValue(21600))
+      .addChannelOption(o => o.setName("channel").setDescription("Channel").addChannelTypes(ChannelType.GuildText)))
     .addSubcommand(s => s
       .setName("off")
       .setDescription("Disable slowmode")
