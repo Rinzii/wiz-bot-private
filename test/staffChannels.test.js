@@ -19,11 +19,15 @@ function createGuild(channels) {
   };
 }
 
-function createChannel(id) {
+function createChannel(id, name = "channel") {
   return {
     id,
+    name,
     isTextBased() {
       return true;
+    },
+    isThread() {
+      return false;
     }
   };
 }
@@ -57,4 +61,21 @@ test("prefers mapped channels before falling back", async () => {
   const channel = await resolveStaffChannel(guild, channelMapService, ["primary", "secondary"], "000");
   assert.ok(channel);
   assert.equal(channel.id, "789");
+});
+
+test("uses default log channel names when available", async () => {
+  const guild = createGuild([
+    createChannel("flag", "🚩-flag-log"),
+    createChannel("fallback", "fallback")
+  ]);
+
+  const channelMapService = {
+    async get() {
+      return null;
+    }
+  };
+
+  const channel = await resolveStaffChannel(guild, channelMapService, "flag_log", "fallback");
+  assert.ok(channel);
+  assert.equal(channel.id, "flag");
 });
