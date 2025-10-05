@@ -1,3 +1,5 @@
+import chalk from "chalk";
+
 // Schema + helpers for command metadata used by /help and permission gating
 
 /**
@@ -26,8 +28,8 @@ export function validateMeta(meta, _filePath = "") {
 
 /** Pretty loader warning. */
 export function logMetaWarning(file, errs) {
-  const head = `[meta] ${file} — ${errs.length} issue(s):`;
-  const bullets = errs.map(e => `  • ${e}`).join("\n");
+  const head = chalk.yellow(`[meta] ${file} — ${errs.length} issue(s):`);
+  const bullets = errs.map(e => chalk.dim(`  • ${e}`)).join("\n");
   console.warn(`${head}\n${bullets}`);
 }
 
