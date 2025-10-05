@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     username: "",
     passwordHash: "",
     sessionSecret: "",
-    secureCookies: true,
+    secureCookies: "auto",
     trustProxy: false,
     rateLimit: {
       windowMs: 60_000,

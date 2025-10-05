@@ -75,12 +75,14 @@ export class DashboardService {
     this.#app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
     const sessionSecret = this.#getSessionSecret();
-    const secureCookies = Boolean(this.#config.secureCookies);
+    const secureCookies = this.#config.secureCookies === "auto"
+      ? "auto"
+      : Boolean(this.#config.secureCookies);
     const maxAge = Number.isFinite(this.#config.sessionMaxAgeMs)
       ? Math.max(60_000, this.#config.sessionMaxAgeMs)
       : 60 * 60_000;
 
-    if (!secureCookies) {
+    if (secureCookies === false) {
       this.#logger?.warn?.("dashboard.cookies.insecure", {
         message: "Session cookies are not marked secure; enable HTTPS and set privateDashboard.secureCookies=true in production."
       });
@@ -249,7 +251,7 @@ export class DashboardService {
       username: "",
       passwordHash: "",
       sessionSecret: "",
-      secureCookies: true,
+      secureCookies: "auto",
       trustProxy: false,
       rateLimit: { windowMs: 60_000, max: 100 },
       loginRateLimit: { windowMs: 15 * 60_000, max: 10 },
@@ -268,7 +270,9 @@ export class DashboardService {
       if (typeof config.username === "string") normalized.username = config.username.trim();
       if (typeof config.passwordHash === "string") normalized.passwordHash = config.passwordHash.trim();
       if (typeof config.sessionSecret === "string") normalized.sessionSecret = config.sessionSecret.trim();
-      if (typeof config.secureCookies === "boolean") normalized.secureCookies = config.secureCookies;
+      if (config.secureCookies === "auto" || typeof config.secureCookies === "boolean") {
+        normalized.secureCookies = config.secureCookies;
+      }
       if (config.trustProxy !== undefined) normalized.trustProxy = config.trustProxy;
       if (config.rateLimit && typeof config.rateLimit === "object") {
         if (Number.isFinite(config.rateLimit.windowMs)) normalized.rateLimit.windowMs = Math.max(1, config.rateLimit.windowMs);
@@ -401,15 +405,42 @@ export class DashboardService {
           resolve();
           return;
         }
-        req.session.authenticated = true;
-        req.session.username = this.#config.username;
-        req.session.createdAt = Date.now();
-        this.#logger?.info?.("dashboard.login_success", {
-          ...attemptContext,
-          username: this.#config.username
-        });
-        res.json({ ok: true, username: this.#config.username });
-        resolve();
+
+        try {
+          req.session.authenticated = true;
+          req.session.username = this.#config.username;
+          req.session.createdAt = Date.now();
+        } catch (assignError) {
+          const message = assignError instanceof Error ? assignError.message : String(assignError);
+          this.#logger?.error?.("dashboard.login_failed", {
+            ...attemptContext,
+            reason: "session_assignment_failed",
+            error: message
+          });
+          res.status(500).json({ error: "Failed to establish session" });
+          resolve();
+          return;
+        }
+
+        this.#commitSession(req)
+          .then(() => {
+            this.#logger?.info?.("dashboard.login_success", {
+              ...attemptContext,
+              username: this.#config.username
+            });
+            res.json({ ok: true, username: this.#config.username });
+          })
+          .catch((saveError) => {
+            const message = saveError instanceof Error ? saveError.message : String(saveError);
+            this.#logger?.error?.("dashboard.login_failed", {
+              ...attemptContext,
+              reason: "session_save_failed",
+              error: message
+            });
+            this.#logger?.error?.("dashboard.session_save_failed", { error: message });
+            res.status(500).json({ error: "Failed to persist session" });
+          })
+          .finally(resolve);
       });
     });
   }
@@ -456,6 +487,23 @@ export class DashboardService {
   #looksLikeBcryptHash(value) {
     if (typeof value !== "string") return false;
     return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+  }
+
+  #commitSession(req) {
+    const session = req.session;
+    if (!session || typeof session.save !== "function") {
+      return Promise.reject(new Error("Session is not available"));
+    }
+
+    return new Promise((resolve, reject) => {
+      session.save((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   }
 
   #getSessionSecret() {
