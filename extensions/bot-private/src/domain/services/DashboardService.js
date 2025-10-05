@@ -344,15 +344,31 @@ export class DashboardService {
 
   async #handleLogin(req, res) {
     const { username, password } = req.body ?? {};
+    const trimmedUsername = typeof username === "string" ? username.trim() : "";
+    const attemptContext = {
+      ip: req.ip,
+      usernameAttempt: trimmedUsername || undefined
+    };
+
+    this.#logger?.info?.("dashboard.login_attempt", attemptContext);
+
     if (typeof username !== "string" || typeof password !== "string") {
+      this.#logger?.warn?.("dashboard.login_failed", {
+        ...attemptContext,
+        reason: "invalid_payload"
+      });
       res.status(400).json({ error: "Invalid request" });
       return;
     }
 
-    const providedUsername = username.trim();
+    const providedUsername = trimmedUsername;
     const providedPassword = password;
 
     if (!providedUsername || !providedPassword) {
+      this.#logger?.warn?.("dashboard.login_failed", {
+        ...attemptContext,
+        reason: "missing_credentials"
+      });
       res.status(400).json({ error: "Username and password are required" });
       return;
     }
@@ -363,8 +379,8 @@ export class DashboardService {
 
     if (!passwordMatches || !usernameMatches) {
       this.#logger?.warn?.("dashboard.login_failed", {
-        ip: req.ip,
-        usernameAttempt: providedUsername
+        ...attemptContext,
+        reason: "invalid_credentials"
       });
       await new Promise(resolve => setTimeout(resolve, 150));
       res.status(401).json({ error: "Invalid username or password" });
@@ -375,6 +391,11 @@ export class DashboardService {
       req.session.regenerate((error) => {
         if (error) {
           const message = error instanceof Error ? error.message : String(error);
+          this.#logger?.error?.("dashboard.login_failed", {
+            ...attemptContext,
+            reason: "session_regenerate_failed",
+            error: message
+          });
           this.#logger?.error?.("dashboard.session_regenerate_failed", { error: message });
           res.status(500).json({ error: "Failed to establish session" });
           resolve();
@@ -383,6 +404,10 @@ export class DashboardService {
         req.session.authenticated = true;
         req.session.username = this.#config.username;
         req.session.createdAt = Date.now();
+        this.#logger?.info?.("dashboard.login_success", {
+          ...attemptContext,
+          username: this.#config.username
+        });
         res.json({ ok: true, username: this.#config.username });
         resolve();
       });
