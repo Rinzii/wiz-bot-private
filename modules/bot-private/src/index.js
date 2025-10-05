@@ -8,7 +8,7 @@ export const PLUGIN_META = {
   name: "bot-private",
   version: "1.0.0",
   description: "Private plugin that provides anti-raid protections and admin-only controls.",
-  provides: { commands: ["antiraid"], events: ["guildMemberAdd"] },
+  provides: { commands: ["antiraid"], events: ["guildMemberAdd", "guildBanAdd"] },
   permissionsNeeded: ["Administrator (to run /antiraid)", "Manage Channels (for lockdown rate limits)"],
   configKeysUsed: ["modLogChannelId"],
   requires: { host: "wiz-discord-bot >= 1.0.0" },
@@ -26,6 +26,7 @@ export default {
 
       async register(container) {
         const { AntiRaidService } = await import("./services/AntiRaidService.js");
+        const { MemberTracker } = await import("./services/MemberTracker.js");
 
         // Resolve the host project's src/ directory relative to this plugin.
         const rootSrc = resolve(__dirname, "../../..", "src");
@@ -49,6 +50,9 @@ export default {
           } catch { return null; }
         };
 
+        const logger = container.get(TOKENS.Logger);
+
+        container.set(PRIVATE_TOKENS.MemberTracker, new MemberTracker({ logger }));
         container.set(PRIVATE_TOKENS.AntiRaidService, new AntiRaidService(getModLog, 10));
       }
     };

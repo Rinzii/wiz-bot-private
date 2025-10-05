@@ -5,6 +5,10 @@ export default {
   once: false,
   async execute(member) {
     try {
+      const tracker = member.client.container.get(PRIVATE_TOKENS.MemberTracker);
+      tracker.onJoin(member);
+    } catch {}
+    try {
       const svc = member.client.container.get(PRIVATE_TOKENS.AntiRaidService);
       await svc.recordJoin(member.guild);
     } catch {}
