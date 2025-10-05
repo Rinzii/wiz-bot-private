@@ -2,8 +2,8 @@ import asyncLib from "async";
 import chalk from "chalk";
 import { REST, Routes } from "discord.js";
 import { join, resolve } from "node:path";
-import { CONFIG } from "../src/config/index.js";
-import { loadPlugins, walkFiles } from "../src/app/registry/loader.js";
+import { CONFIG } from "../../src/config/index.js";
+import { loadPlugins, walkFiles } from "../../src/app/registry/loader.js";
 
 async function collectAllCommands() {
   const roots = [join(process.cwd(), "src", "features", "commands")];
