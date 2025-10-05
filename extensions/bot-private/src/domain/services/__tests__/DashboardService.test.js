@@ -42,7 +42,13 @@ const getOpenPort = () =>
     server.on("error", reject);
   });
 
-async function createService({ username = "admin", passwordHash, basePath = "/" }) {
+async function createService({
+  username = "admin",
+  passwordHash,
+  basePath = "/",
+  secureCookies = false,
+  trustProxy = false
+}) {
   const logger = createLogger();
   const port = await getOpenPort();
   const service = new DashboardService({
@@ -53,7 +59,8 @@ async function createService({ username = "admin", passwordHash, basePath = "/" 
       username,
       passwordHash,
       sessionSecret: "test-secret",
-      secureCookies: false
+      secureCookies,
+      trustProxy
     },
     logger,
     warningModel: noopModel,
@@ -65,10 +72,10 @@ async function createService({ username = "admin", passwordHash, basePath = "/" 
   return { service, logger, port };
 }
 
-const login = async (port, { username, password }) => {
+const login = async (port, { username, password, headers = {} }) => {
   const res = await fetch(`http://127.0.0.1:${port}/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ username, password })
   });
   const data = await res.json().catch(() => ({}));
@@ -135,4 +142,37 @@ test("dashboard login redirects html form submissions to the dashboard", async (
 
   assert.equal(res.status, 303);
   assert.equal(res.headers.get("location"), basePath);
+});
+
+test("dashboard requires HTTPS when secure cookies are enforced", async (t) => {
+  const hash = await bcrypt.hash("s3cret", 4);
+  const { service, port, logger } = await createService({ passwordHash: hash, secureCookies: true });
+  t.after(async () => {
+    await service.stop();
+  });
+
+  const { status, data } = await login(port, { username: "admin", password: "s3cret" });
+
+  assert.equal(status, 400);
+  assert.match(data.error, /Secure cookies are enabled/i);
+
+  const warning = logger.entries.warn.find((entry) => entry.event === "dashboard.login_failed" && entry.payload?.reason === "insecure_transport");
+  assert.ok(warning, "expected insecure transport warning to be logged");
+});
+
+test("dashboard accepts secure cookie logins when the proxy is trusted", async (t) => {
+  const hash = await bcrypt.hash("s3cret", 4);
+  const { service, port } = await createService({ passwordHash: hash, secureCookies: true, trustProxy: true });
+  t.after(async () => {
+    await service.stop();
+  });
+
+  const { status, data } = await login(port, {
+    username: "admin",
+    password: "s3cret",
+    headers: { "X-Forwarded-Proto": "https" }
+  });
+
+  assert.equal(status, 200);
+  assert.equal(data.ok, true);
 });

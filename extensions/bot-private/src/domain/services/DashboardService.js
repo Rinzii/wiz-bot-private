@@ -49,8 +49,9 @@ export class DashboardService {
     this.#app = express();
     this.#app.disable("x-powered-by");
 
-    if (this.#config.trustProxy) {
-      this.#app.set("trust proxy", this.#config.trustProxy === true ? 1 : this.#config.trustProxy);
+    const trustProxySetting = this.#config.trustProxy;
+    if (trustProxySetting) {
+      this.#app.set("trust proxy", trustProxySetting === true ? 1 : trustProxySetting);
     }
 
     this.#app.use(helmet({
@@ -99,6 +100,7 @@ export class DashboardService {
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
+      proxy: Boolean(trustProxySetting),
       cookie: {
         httpOnly: true,
         sameSite: "strict",
@@ -374,6 +376,19 @@ export class DashboardService {
       .some((type) => type === "text/html" || type === "application/xhtml+xml");
   }
 
+  #requestAppearsSecure(req) {
+    if (!req) return false;
+    if (req.secure) return true;
+    const forwarded = req.headers?.["x-forwarded-proto"];
+    if (typeof forwarded === "string" && forwarded.length > 0) {
+      return forwarded
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .includes("https");
+    }
+    return false;
+  }
+
   #createRateLimiter(options, metricKey) {
     if (!options || typeof options !== "object") return null;
     const windowMs = Number.isFinite(options.windowMs) ? Math.max(1, options.windowMs) : null;
@@ -429,6 +444,32 @@ export class DashboardService {
     };
 
     this.#logger?.info?.("dashboard.login_attempt", attemptContext);
+
+    const requiresSecureCookies = this.#config.secureCookies === true;
+    if (requiresSecureCookies) {
+      const requestLooksSecure = this.#requestAppearsSecure(req);
+      if (!requestLooksSecure) {
+        this.#logger?.warn?.("dashboard.login_failed", {
+          ...attemptContext,
+          reason: "insecure_transport"
+        });
+        res.status(400).json({
+          error: "Secure cookies are enabled; access the dashboard over HTTPS or disable PRIVATE_DASHBOARD_SECURE_COOKIES."
+        });
+        return;
+      }
+
+      if (!req.secure && requestLooksSecure && !this.#config.trustProxy) {
+        this.#logger?.error?.("dashboard.login_failed", {
+          ...attemptContext,
+          reason: "proxy_not_trusted"
+        });
+        res.status(400).json({
+          error: "Secure cookies are enabled, but the proxy is not trusted. Set PRIVATE_DASHBOARD_TRUST_PROXY to trust the reverse proxy."
+        });
+        return;
+      }
+    }
 
     if (typeof username !== "string" || typeof password !== "string") {
       this.#logger?.warn?.("dashboard.login_failed", {
@@ -2471,7 +2512,147 @@ export class DashboardService {
     const channelCache = new Map();
     let statsSnapshot = null;
 
-    const CHANNEL_TYPES = {
+    const requireElement = (id) => {
+      const el = document.getElementById(id);
+      if (!el) {
+        throw new Error('Missing required dashboard element #' + id);
+      }
+      return el;
+    };
+
+    const ensureTableBody = (table, id) => {
+      if (!table) {
+        throw new Error('Missing required dashboard element #' + id);
+      }
+      const existing = table.querySelector('tbody');
+      if (existing) return existing;
+      const created = document.createElement('tbody');
+      table.appendChild(created);
+      return created;
+    };
+
+    let loginSection;
+    let dashboardSection;
+    let loginForm;
+    let loginUsername;
+    let loginPassword;
+    let loginErrorEl;
+    let sessionMeta;
+    let guildFilterEl;
+    let userSearchWrapper;
+    let userSearchEl;
+    let refreshBtn;
+    let logoutBtn;
+    let tabBar;
+    let tabButtons;
+    let tabPanels;
+    let statsStatusEl;
+    let statsErrorEl;
+    let statsSummaryEl;
+    let insightsGrid;
+    let guildStatsWrapper;
+    let guildStatsTable;
+    let guildStatsBody;
+    let moderationSection;
+    let moderationSummaryEl;
+    let moderationListsEl;
+    let moderationTimelineCard;
+    let moderationGuildWrapper;
+    let moderationGuildTable;
+    let moderationGuildBody;
+    let moderationMetaEl;
+    let moderationEmptyEl;
+    let usersStatusEl;
+    let usersErrorEl;
+    let userTable;
+    let userTableBody;
+    let userDetailEl;
+    let rolesStatusEl;
+    let rolesErrorEl;
+    let roleSummaryEl;
+    let roleTopList;
+    let roleTable;
+    let roleTableBody;
+    let channelsStatusEl;
+    let channelsErrorEl;
+    let channelSummaryEl;
+    let channelTable;
+    let channelTableBody;
+
+    let initializationFailed = false;
+    let initializationError = null;
+
+    try {
+      loginSection = requireElement('login-section');
+      dashboardSection = requireElement('dashboard-section');
+      loginForm = requireElement('login-form');
+      loginUsername = requireElement('login-username');
+      loginPassword = requireElement('login-password');
+      loginErrorEl = requireElement('login-error');
+      sessionMeta = requireElement('session-meta');
+      guildFilterEl = requireElement('guild-filter');
+      userSearchWrapper = requireElement('user-search-wrapper');
+      userSearchEl = requireElement('user-search');
+      refreshBtn = requireElement('refresh-btn');
+      logoutBtn = requireElement('logout-btn');
+      tabBar = requireElement('tab-bar');
+      tabButtons = Array.from(tabBar.querySelectorAll('.tab'));
+      tabPanels = Array.from(document.querySelectorAll('[data-tab-content]'));
+
+      statsStatusEl = requireElement('stats-status');
+      statsErrorEl = requireElement('stats-error');
+      statsSummaryEl = requireElement('stats-summary');
+      insightsGrid = requireElement('insights-grid');
+      guildStatsWrapper = requireElement('guild-stats-wrapper');
+      guildStatsTable = requireElement('guild-stats-table');
+      guildStatsBody = ensureTableBody(guildStatsTable, 'guild-stats-table');
+      moderationSection = requireElement('moderation-section');
+      moderationSummaryEl = requireElement('moderation-summary');
+      moderationListsEl = requireElement('moderation-lists');
+      moderationTimelineCard = requireElement('moderation-timeline');
+      moderationGuildWrapper = requireElement('moderation-guild-wrapper');
+      moderationGuildTable = requireElement('moderation-guild-table');
+      moderationGuildBody = ensureTableBody(moderationGuildTable, 'moderation-guild-table');
+      moderationMetaEl = document.getElementById('moderation-meta');
+      moderationEmptyEl = document.getElementById('moderation-empty');
+
+      usersStatusEl = requireElement('users-status');
+      usersErrorEl = requireElement('users-error');
+      userTable = requireElement('user-table');
+      userTableBody = ensureTableBody(userTable, 'user-table');
+      userDetailEl = requireElement('user-detail');
+
+      rolesStatusEl = requireElement('roles-status');
+      rolesErrorEl = requireElement('roles-error');
+      roleSummaryEl = requireElement('role-summary');
+      roleTopList = requireElement('role-top-list');
+      roleTable = requireElement('role-table');
+      roleTableBody = ensureTableBody(roleTable, 'role-table');
+
+      channelsStatusEl = requireElement('channels-status');
+      channelsErrorEl = requireElement('channels-error');
+      channelSummaryEl = requireElement('channel-summary');
+      channelTable = requireElement('channel-table');
+      channelTableBody = ensureTableBody(channelTable, 'channel-table');
+    } catch (error) {
+      initializationFailed = true;
+      initializationError = error;
+    }
+
+    if (initializationFailed) {
+      const container = dashboardSection ?? document.body;
+      if (container === dashboardSection) {
+        container.innerHTML = '';
+      }
+      const errorBanner = document.createElement('div');
+      errorBanner.className = 'error';
+      errorBanner.textContent = 'Failed to initialize the dashboard. ' + (initializationError?.message || 'Please reload the page.');
+      container.appendChild(errorBanner);
+      console.error(initializationError);
+      return;
+    }
+
+      const CHANNEL_TYPES = {
       GUILD_TEXT: 0,
       GUILD_VOICE: 2,
       GUILD_CATEGORY: 4,
@@ -2485,59 +2666,7 @@ export class DashboardService {
       GUILD_MEDIA: 16
     };
 
-    const loginSection = document.getElementById('login-section');
-    const dashboardSection = document.getElementById('dashboard-section');
-    const loginForm = document.getElementById('login-form');
-    const loginUsername = document.getElementById('login-username');
-    const loginPassword = document.getElementById('login-password');
-    const loginErrorEl = document.getElementById('login-error');
-    const sessionMeta = document.getElementById('session-meta');
-    const guildFilterEl = document.getElementById('guild-filter');
-    const userSearchWrapper = document.getElementById('user-search-wrapper');
-    const userSearchEl = document.getElementById('user-search');
-    const refreshBtn = document.getElementById('refresh-btn');
-    const logoutBtn = document.getElementById('logout-btn');
-    const tabBar = document.getElementById('tab-bar');
-    const tabButtons = Array.from(tabBar.querySelectorAll('.tab'));
-    const tabPanels = Array.from(document.querySelectorAll('[data-tab-content]'));
-
-    const statsStatusEl = document.getElementById('stats-status');
-    const statsErrorEl = document.getElementById('stats-error');
-    const statsSummaryEl = document.getElementById('stats-summary');
-    const insightsGrid = document.getElementById('insights-grid');
-    const guildStatsWrapper = document.getElementById('guild-stats-wrapper');
-    const guildStatsTable = document.getElementById('guild-stats-table');
-    const guildStatsBody = guildStatsTable.querySelector('tbody');
-    const moderationSection = document.getElementById('moderation-section');
-    const moderationSummaryEl = document.getElementById('moderation-summary');
-    const moderationListsEl = document.getElementById('moderation-lists');
-    const moderationTimelineCard = document.getElementById('moderation-timeline');
-    const moderationGuildWrapper = document.getElementById('moderation-guild-wrapper');
-    const moderationGuildTable = document.getElementById('moderation-guild-table');
-    const moderationGuildBody = moderationGuildTable.querySelector('tbody');
-    const moderationMetaEl = document.getElementById('moderation-meta');
-    const moderationEmptyEl = document.getElementById('moderation-empty');
-
-    const usersStatusEl = document.getElementById('users-status');
-    const usersErrorEl = document.getElementById('users-error');
-    const userTable = document.getElementById('user-table');
-    const userTableBody = userTable.querySelector('tbody');
-    const userDetailEl = document.getElementById('user-detail');
-
-    const rolesStatusEl = document.getElementById('roles-status');
-    const rolesErrorEl = document.getElementById('roles-error');
-    const roleSummaryEl = document.getElementById('role-summary');
-    const roleTopList = document.getElementById('role-top-list');
-    const roleTable = document.getElementById('role-table');
-    const roleTableBody = roleTable.querySelector('tbody');
-
-    const channelsStatusEl = document.getElementById('channels-status');
-    const channelsErrorEl = document.getElementById('channels-error');
-    const channelSummaryEl = document.getElementById('channel-summary');
-    const channelTable = document.getElementById('channel-table');
-    const channelTableBody = channelTable.querySelector('tbody');
-
-    const numberFormatter = new Intl.NumberFormat();
+      const numberFormatter = new Intl.NumberFormat();
     const compactNumberFormatter = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
     const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
     const dateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
