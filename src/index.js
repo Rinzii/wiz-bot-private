@@ -44,7 +44,6 @@ async function main() {
   container.set(TOKENS.ChannelMapService, channelMapService);
   const staffRoleService = new StaffRoleService();
   container.set(TOKENS.StaffRoleService, staffRoleService);
-  container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
   container.set(TOKENS.StaffMemberLogService, new StaffMemberLogService({
