@@ -58,6 +58,19 @@ export class ModerationLogService {
     }).sort({ createdAt: -1 }).lean();
   }
 
+  async findLatestByActions({ guildId, userId, actions, includeExpunged = false }) {
+    if (!guildId || !userId || !Array.isArray(actions) || !actions.length) return null;
+    const uniqueActions = [...new Set(actions.map(a => (typeof a === "string" ? a.trim() : a)).filter(Boolean))];
+    if (!uniqueActions.length) return null;
+
+    const query = { guildId, userId, action: { $in: uniqueActions } };
+    if (!includeExpunged) query.expungedAt = null;
+
+    return ModerationActionModel.findOne(query)
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+  }
+
   async list({ guildId, userId, action, limit = 20, beforeId, includeExpunged = false }) {
     if (!guildId) return [];
     const query = { guildId };

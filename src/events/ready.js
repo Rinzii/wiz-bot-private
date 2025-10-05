@@ -14,5 +14,14 @@ export default {
         error: String(err?.message || err)
       });
     }
+
+    try {
+      const allowedInviteService = client.container.get(TOKENS.AllowedInviteService);
+      client.container.get(TOKENS.Logger)?.info?.("invite_guard.allowlist_ready", { count: allowedInviteService.size });
+    } catch (err) {
+      client.container.get(TOKENS.Logger)?.error?.("invite_guard.allowlist_log_failed", {
+        error: String(err?.message || err)
+      });
+    }
   }
 };

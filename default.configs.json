@@ -19,11 +19,30 @@
     "green": "0x57F287",
     "red": "0xED4245",
     "default": "0x5865F2"
+  "fileScanner": {
+    "enabled": true,
+    "prefixBytes": 512,
+    "staffFlagChannelKey": "flag_log",
+    "staffActionChannelKey": "action_log",
+    "vtActionThreshold": 5,
+    "vtMuteDurationMs": 86400000,
+    "virusTotal": {
+      "apiKey": "YOUR_VT_API_KEY",
+      "pollIntervalMs": 5000,
+      "maxPolls": 12,
+      "maxFileBytes": 33554432
+    }
   },
   "antiSpam": {
     "msgWindowMs": 15000,
     "msgMaxInWindow": 10,
     "linkWindowMs": 45000,
     "linkMaxInWindow": 6
+  },
+  "channels": {
+    "staff_action_log": "123456789012345678"
+  },
+  "colors": {
+    "alert_color": "#F05A66"
   }
 }
