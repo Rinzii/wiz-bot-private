@@ -51,7 +51,7 @@ const ENV_OVERRIDES = [
   { env: "PRIVATE_DASHBOARD_USERNAME", path: "privateDashboard.username", parse: parseString },
   { env: "PRIVATE_DASHBOARD_PASSWORD_HASH", path: "privateDashboard.passwordHash", parse: parseString },
   { env: "PRIVATE_DASHBOARD_SESSION_SECRET", path: "privateDashboard.sessionSecret", parse: parseString },
-  { env: "PRIVATE_DASHBOARD_SECURE_COOKIES", path: "privateDashboard.secureCookies", parse: parseBoolean },
+  { env: "PRIVATE_DASHBOARD_SECURE_COOKIES", path: "privateDashboard.secureCookies", parse: parseSecureCookieMode },
   { env: "PRIVATE_DASHBOARD_TRUST_PROXY", path: "privateDashboard.trustProxy", parse: parseBoolean },
   { env: "PRIVATE_DASHBOARD_RATE_LIMIT_WINDOW_MS", path: "privateDashboard.rateLimit.windowMs", parse: parseNumber },
   { env: "PRIVATE_DASHBOARD_RATE_LIMIT_MAX", path: "privateDashboard.rateLimit.max", parse: parseNumber },
@@ -234,6 +234,13 @@ function parseBoolean(value) {
   if (["true", "1", "yes", "y", "on", "enable", "enabled"].includes(normalized)) return true;
   if (["false", "0", "no", "n", "off", "disable", "disabled"].includes(normalized)) return false;
   return undefined;
+}
+
+function parseSecureCookieMode(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "auto") return "auto";
+  if (typeof value === "string" && value.trim().toLowerCase() === "auto") return "auto";
+  return parseBoolean(value);
 }
 
 function parseColor(value) {
