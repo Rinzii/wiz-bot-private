@@ -3,89 +3,22 @@ import { join, resolve } from "node:path";
 import { CONFIG } from "../config/index.js";
 import { connectMongo } from "../infrastructure/database/mongoose.js";
 import { Container, TOKENS } from "./container/index.js";
-import { WarningService } from "../domain/services/WarningService.js";
-import { ModerationService } from "../domain/services/ModerationService.js";
-import { ChannelMapService } from "../domain/services/ChannelMapService.js";
-import { StaffRoleService } from "../domain/services/StaffRoleService.js";
-import { AntiSpamService } from "../domain/services/AntiSpamService.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./registry/loader.js";
-import { Logger } from "../shared/utils/logger.js";
 import mongoose from "mongoose";
-import { ModerationLogService } from "../domain/services/ModerationLogService.js";
-import { RuntimeModerationState } from "../domain/services/RuntimeModerationState.js";
-import { StaffMemberLogService } from "../domain/services/StaffMemberLogService.js";
-import { AllowedInviteService } from "../domain/services/AllowedInviteService.js";
-import { VirusTotalService } from "../domain/services/VirusTotalService.js";
-import { MentionTrackerService } from "../domain/services/MentionTrackerService.js";
-import { DisplayNamePolicyService } from "../domain/services/DisplayNamePolicyService.js";
-import { GuildConfigService } from "../domain/services/GuildConfigService.js";
+import { registerCoreServices } from "./container/registerCoreServices.js";
 
 async function main() {
   await connectMongo();
 
   const container = new Container();
 
-  // Logger + Debug state
-  const debugState = { channelId: CONFIG.debugChannelId || "" };
-  const logger = new Logger({ level: CONFIG.logLevel, mirrorFn: null });
-  container.set(TOKENS.Logger, logger);
-  container.set(TOKENS.DebugState, debugState);
-
-  // Core services
-  const moderationLogService = new ModerationLogService();
-  container.set(TOKENS.ModerationLogService, moderationLogService);
-
-  const warningService = new WarningService(moderationLogService);
-  container.set(TOKENS.WarningService, warningService);
-
-  const moderationService = new ModerationService(logger, moderationLogService);
-  container.set(TOKENS.ModerationService, moderationService);
-
-  const channelMapService = new ChannelMapService();
-  container.set(TOKENS.ChannelMapService, channelMapService);
-  const staffRoleService = new StaffRoleService();
-  container.set(TOKENS.StaffRoleService, staffRoleService);
-  const guildConfigService = new GuildConfigService();
-  container.set(TOKENS.GuildConfigService, guildConfigService);
-  container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
-  container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
-  container.set(TOKENS.StaffMemberLogService, new StaffMemberLogService({
-    channelMapService,
-    fallbackChannelResolver: async (guild) => {
-      if (!guild?.id) return CONFIG.channels?.staffMemberLogId || CONFIG.modLogChannelId || "";
-      const dynamicId = await guildConfigService.getModLogChannelId(guild.id);
-      return dynamicId || CONFIG.channels?.staffMemberLogId || CONFIG.modLogChannelId || "";
-    },
-    logger
-  }));
-  const allowedInviteService = new AllowedInviteService();
-  container.set(TOKENS.AllowedInviteService, allowedInviteService);
-
-  try {
-    const count = await allowedInviteService.loadAll();
-    logger?.info?.("invite_guard.allowlist_preload", { count });
-  } catch (err) {
-    logger?.error?.("invite_guard.allowlist_preload_failed", { error: String(err?.message || err) });
-  }
-  container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
-  const mentionTrackerService = new MentionTrackerService({
+  const {
     logger,
-    channelMapService,
-    staffRoleService,
-    config: CONFIG.mentionTracker || {},
-    fallbackChannelResolver: async (guild) => {
-      if (!guild?.id) return CONFIG.modLogChannelId || "";
-      const dynamicId = await guildConfigService.getModLogChannelId(guild.id);
-      return dynamicId || CONFIG.modLogChannelId || "";
-    }
-  });
-  container.set(TOKENS.MentionTrackerService, mentionTrackerService);
-
-  const displayNamePolicyService = new DisplayNamePolicyService({
-    logger,
-    sweepIntervalMinutes: CONFIG.displayNamePolicy?.sweepIntervalMinutes ?? 60
-  });
-  container.set(TOKENS.DisplayNamePolicyService, displayNamePolicyService);
+    moderationService,
+    allowedInviteService,
+    debugState
+  } = await registerCoreServices({ container, config: CONFIG });
+  void allowedInviteService;
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
