@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import { DEFAULT_CONFIG } from "./defaults.js";
 
-const CONFIG_FILES = ["config/default.json", "config/local.json"];
+const CONFIG_FILES = ["config/default.jsonc", "config/local.jsonc"];
 
 const ENV_OVERRIDES = [
   { env: "DISCORD_TOKEN", path: "token", parse: parseString },
@@ -75,7 +76,8 @@ function loadConfigLayers() {
     const filePath = join(cwd, fileName);
     if (!existsSync(filePath)) continue;
     try {
-      const raw = JSON.parse(readFileSync(filePath, "utf8"));
+      const rawText = readFileSync(filePath, "utf8");
+      const raw = parseConfigFile(rawText, fileName);
       const normalized = normalizeLayer(raw);
       if (normalized && Object.keys(normalized).length) {
         layers.push(normalized);
@@ -85,6 +87,27 @@ function loadConfigLayers() {
     }
   }
   return layers;
+}
+
+function parseConfigFile(rawText, fileName) {
+  const errors = [];
+  const data = parseJsonc(rawText, errors, { allowTrailingComma: true });
+  if (errors.length > 0) {
+    const { error, offset } = errors[0];
+    const { line, column } = offsetToPosition(rawText, offset);
+    const description = printParseErrorCode(error);
+    throw new Error(`${description} at ${fileName}:${line}:${column}`);
+  }
+  if (!data || typeof data !== "object") return {};
+  return data;
+}
+
+function offsetToPosition(text, offset) {
+  const sliced = text.slice(0, offset);
+  const lines = sliced.split(/\r?\n/);
+  const line = lines.length;
+  const column = lines[lines.length - 1].length + 1;
+  return { line, column };
 }
 
 function normalizeLayer(input) {

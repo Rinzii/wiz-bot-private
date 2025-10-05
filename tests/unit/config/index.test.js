@@ -108,11 +108,11 @@ test("falls back to defaults when no files or env overrides are present", () => 
 test("merges layered config files with normalization", () => {
   const config = loadConfigSnapshot({
     files: {
-      "config/default.json": {
+      "config/default.jsonc": {
         brandNew: { enabled: false },
         channels: { staff_member_log: "111111111111111111" }
       },
-      "config/local.json": {
+      "config/local.jsonc": {
         brandNew: { thresholdMs: 1234 },
         channels: { staffActionLogId: "222222222222222222" },
         antiSpam: { msgMaxInWindow: 20 }
@@ -132,10 +132,10 @@ test("merges layered config files with normalization", () => {
 test("environment overrides have highest precedence and parse values", () => {
   const config = loadConfigSnapshot({
     files: {
-      "config/default.json": {
+      "config/default.jsonc": {
         brandNew: { enabled: false }
       },
-      "config/local.json": {
+      "config/local.jsonc": {
         brandNew: { enabled: false, alertChannelId: "should-be-overridden" },
         colors: { red: 0 },
         mentionTracker: {
