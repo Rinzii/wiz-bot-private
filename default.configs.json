@@ -26,6 +26,13 @@
       "maxFileBytes": 33554432
     }
   },
+  "mentionTracker": {
+    "enabled": false,
+    "staffFlagChannelKey": "flag_log",
+    "trackedRoleIds": [],
+    "trackedUserIds": [],
+    "additionalFlagChannelKeys": []
+  },
   "antiSpam": {
     "msgWindowMs": 15000,
     "msgMaxInWindow": 10,

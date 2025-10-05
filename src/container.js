@@ -17,5 +17,6 @@ export const TOKENS = {
   StaffRoleService: "StaffRoleService",
   AntiSpamService: "AntiSpamService",
   RuntimeModerationState: "RuntimeModerationState",
-  VirusTotalService: "VirusTotalService"
+  VirusTotalService: "VirusTotalService",
+  MentionTrackerService: "MentionTrackerService"
 };

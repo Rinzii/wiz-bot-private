@@ -14,6 +14,7 @@ import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
 import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
+import { MentionTrackerService } from "./services/MentionTrackerService.js";
 
 async function main() {
   await connectMongo();
@@ -36,11 +37,21 @@ async function main() {
   const moderationService = new ModerationService(logger, moderationLogService);
   container.set(TOKENS.ModerationService, moderationService);
 
-  container.set(TOKENS.ChannelMapService, new ChannelMapService());
-  container.set(TOKENS.StaffRoleService, new StaffRoleService());
+  const channelMapService = new ChannelMapService();
+  container.set(TOKENS.ChannelMapService, channelMapService);
+  const staffRoleService = new StaffRoleService();
+  container.set(TOKENS.StaffRoleService, staffRoleService);
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
   container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
+  const mentionTrackerService = new MentionTrackerService({
+    logger,
+    channelMapService,
+    staffRoleService,
+    config: CONFIG.mentionTracker || {},
+    fallbackChannelId: CONFIG.modLogChannelId
+  });
+  container.set(TOKENS.MentionTrackerService, mentionTrackerService);
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));

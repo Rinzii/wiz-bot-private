@@ -2,6 +2,7 @@ import { EmbedBuilder } from "discord.js";
 import { TOKENS } from "../container.js";
 import { CONFIG } from "../config.js";
 import { formatDuration } from "../utils/time.js";
+import { resolveStaffChannel } from "../utils/staffChannels.js";
 
 const EXECUTABLE_SIGNATURES = [
   { label: "PE (Windows)", signature: [0x4d, 0x5a] },
@@ -120,39 +121,6 @@ function quoteBlock(text) {
 function truncate(text, limit) {
   if (!text) return "";
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
-}
-
-async function resolveStaffChannel(guild, cms, preferredKey, fallbackId) {
-  if (!guild || !cms) return null;
-  const seen = new Set();
-  const tryFetch = async (id) => {
-    if (!id || seen.has(id)) return null;
-    seen.add(id);
-    const cached = guild.channels.cache.get(id);
-    if (cached?.isTextBased?.()) return cached;
-    try {
-      const fetched = await guild.channels.fetch(id).catch(() => null);
-      return fetched?.isTextBased?.() ? fetched : null;
-    } catch {
-      return null;
-    }
-  };
-  const keys = [preferredKey].filter(Boolean);
-  for (const key of keys) {
-    try {
-      const mapping = await cms.get(guild.id, key);
-      if (!mapping?.channelId) continue;
-      const channel = await tryFetch(mapping.channelId);
-      if (channel) return channel;
-    } catch {
-      // ignore lookup errors
-    }
-  }
-  if (fallbackId) {
-    const fallbackChannel = await tryFetch(fallbackId);
-    if (fallbackChannel) return fallbackChannel;
-  }
-  return null;
 }
 
 function buildFlagEmbed({ message, author, channelId, attachments, classification, staffNote }) {
