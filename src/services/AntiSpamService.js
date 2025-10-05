@@ -54,4 +54,11 @@ export class AntiSpamService {
     }
     return { shouldBan: false };
   }
+
+  clear(guildId, userId) {
+    const g = this.state.get(guildId);
+    if (!g) return;
+    g.delete(userId);
+    if (g.size === 0) this.state.delete(guildId);
+  }
 }

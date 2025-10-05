@@ -6,5 +6,11 @@
   },
   "mongo": { "uri": "mongodb://localhost:27017/discord_modbot" },
   "privateModuleDirs": ["modules/bot-private"],
-  "modLogChannelId": "123456789012345678"
+  "modLogChannelId": "123456789012345678",
+  "antiSpam": {
+    "msgWindowMs": 15000,
+    "msgMaxInWindow": 10,
+    "linkWindowMs": 45000,
+    "linkMaxInWindow": 6
+  }
 }

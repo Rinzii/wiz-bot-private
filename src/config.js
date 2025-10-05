@@ -14,6 +14,19 @@ const toList = (v) => {
   if (Array.isArray(v)) return v;
   return String(v).split(",").map(s => s.trim()).filter(Boolean);
 };
+const toNumber = (v, fallback) => {
+  if (v === undefined || v === null || v === "") return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const antiSpamDefaults = {
+  msgWindowMs: 15_000,
+  msgMaxInWindow: 10,
+  linkWindowMs: 45_000,
+  linkMaxInWindow: 6
+};
+const antiSpamFileCfg = fileCfg?.antiSpam || {};
 
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
@@ -23,7 +36,13 @@ export const CONFIG = {
   privateModuleDirs: toList(envOr("PRIVATE_MODULE_DIRS", fileCfg?.privateModuleDirs || [])),
   modLogChannelId: envOr("MOD_LOG_CHANNEL_ID", fileCfg?.modLogChannelId || ""),
   logLevel: envOr("LOG_LEVEL", "info"),
-  debugChannelId: envOr("DEBUG_CHANNEL_ID", "")
+  debugChannelId: envOr("DEBUG_CHANNEL_ID", ""),
+  antiSpam: {
+    msgWindowMs: toNumber(envOr("ANTISPAM_MSG_WINDOW_MS", antiSpamFileCfg.msgWindowMs ?? antiSpamDefaults.msgWindowMs), antiSpamDefaults.msgWindowMs),
+    msgMaxInWindow: toNumber(envOr("ANTISPAM_MSG_MAX", antiSpamFileCfg.msgMaxInWindow ?? antiSpamDefaults.msgMaxInWindow), antiSpamDefaults.msgMaxInWindow),
+    linkWindowMs: toNumber(envOr("ANTISPAM_LINK_WINDOW_MS", antiSpamFileCfg.linkWindowMs ?? antiSpamDefaults.linkWindowMs), antiSpamDefaults.linkWindowMs),
+    linkMaxInWindow: toNumber(envOr("ANTISPAM_LINK_MAX", antiSpamFileCfg.linkMaxInWindow ?? antiSpamDefaults.linkMaxInWindow), antiSpamDefaults.linkMaxInWindow)
+  }
 };
 
 if (!CONFIG.token || !CONFIG.clientId) {

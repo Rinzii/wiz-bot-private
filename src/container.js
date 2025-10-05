@@ -11,5 +11,6 @@ export const TOKENS = {
   WarningService: "WarningService",
   ModerationService: "ModerationService",
   ChannelMapService: "ChannelMapService",
-  StaffRoleService: "StaffRoleService"
+  StaffRoleService: "StaffRoleService",
+  AntiSpamService: "AntiSpamService"
 };
