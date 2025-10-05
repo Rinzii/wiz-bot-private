@@ -14,6 +14,7 @@ import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
 import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
 import { AllowedInviteService } from "./services/AllowedInviteService.js";
+import { VirusTotalService } from "./services/VirusTotalService.js";
 
 async function main() {
   await connectMongo();
@@ -49,6 +50,7 @@ async function main() {
   } catch (err) {
     logger?.error?.("invite_guard.allowlist_preload_failed", { error: String(err?.message || err) });
   }
+  container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));

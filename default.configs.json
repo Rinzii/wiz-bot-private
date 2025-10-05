@@ -12,10 +12,30 @@
     "thresholdMs": 1800000,
     "alertChannelId": "123456789012345678"
   },
+  "fileScanner": {
+    "enabled": true,
+    "prefixBytes": 512,
+    "staffFlagChannelKey": "flag_log",
+    "staffActionChannelKey": "action_log",
+    "vtActionThreshold": 5,
+    "vtMuteDurationMs": 86400000,
+    "virusTotal": {
+      "apiKey": "YOUR_VT_API_KEY",
+      "pollIntervalMs": 5000,
+      "maxPolls": 12,
+      "maxFileBytes": 33554432
+    }
+  },
   "antiSpam": {
     "msgWindowMs": 15000,
     "msgMaxInWindow": 10,
     "linkWindowMs": 45000,
     "linkMaxInWindow": 6
+  },
+  "channels": {
+    "staff_action_log": "123456789012345678"
+  },
+  "colors": {
+    "alert_color": "#F05A66"
   }
 }
