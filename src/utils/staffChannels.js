@@ -1,5 +1,5 @@
 export async function resolveStaffChannel(guild, channelMapService, preferredKeys, fallback) {
-  if (!guild || !channelMapService) return null;
+  if (!guild) return null;
 
   const seen = new Set();
   const tryFetch = async (id) => {
@@ -16,14 +16,16 @@ export async function resolveStaffChannel(guild, channelMapService, preferredKey
   };
 
   const keys = Array.isArray(preferredKeys) ? preferredKeys : [preferredKeys].filter(Boolean);
-  for (const key of keys) {
-    try {
-      const mapping = await channelMapService.get(guild.id, key);
-      if (!mapping?.channelId) continue;
-      const channel = await tryFetch(mapping.channelId);
-      if (channel) return channel;
-    } catch {
-      // ignore lookup errors
+  if (channelMapService) {
+    for (const key of keys) {
+      try {
+        const mapping = await channelMapService.get(guild.id, key);
+        if (!mapping?.channelId) continue;
+        const channel = await tryFetch(mapping.channelId);
+        if (channel) return channel;
+      } catch {
+        // ignore lookup errors
+      }
     }
   }
 
