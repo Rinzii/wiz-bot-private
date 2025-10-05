@@ -3,8 +3,8 @@ const { Schema, model } = mongoose;
 
 /** Map guild -> staff role IDs, keyed by label (e.g., "admin", "mod"). */
 const StaffRoleSchema = new Schema({
-  guildId: { type: String, required: true, index: true },
-  key:     { type: String, required: true, index: true },   // "admin", "mod", etc.
+  guildId: { type: String, required: true },
+  key:     { type: String, required: true },   // "admin", "mod", etc.
   roleId:  { type: String, required: true }
 }, { timestamps: true });
 

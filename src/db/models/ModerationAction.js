@@ -3,10 +3,10 @@ import mongoose from "mongoose";
 const { Schema, model } = mongoose;
 
 const ModerationActionSchema = new Schema({
-  guildId: { type: String, required: true, index: true },
-  userId: { type: String, required: true, index: true },
+  guildId: { type: String, required: true },
+  userId: { type: String, required: true },
   moderatorId: { type: String, default: null, index: true },
-  action: { type: String, required: true, index: true },
+  action: { type: String, required: true },
   caseNumber: { type: Number, required: true },
   reason: { type: String, default: "No reason provided." },
   durationMs: { type: Number, default: null },
