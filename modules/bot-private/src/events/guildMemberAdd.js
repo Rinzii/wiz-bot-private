@@ -6,13 +6,13 @@ import { PRIVATE_TOKENS } from "../services/tokens.js";
 
 const ACTION_TYPES = [
   ModerationActionType.Ban,
-  "softban",
+  ModerationActionType.Softban,
   ModerationActionType.Kick
 ];
 
 const ACTION_DISPLAY = {
   [ModerationActionType.Ban]: { past: "banned", noun: "ban" },
-  softban: { past: "softbanned", noun: "softban" },
+  [ModerationActionType.Softban]: { past: "softbanned", noun: "softban" },
   [ModerationActionType.Kick]: { past: "kicked", noun: "kick" }
 };
 

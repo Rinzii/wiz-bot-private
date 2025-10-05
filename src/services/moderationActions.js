@@ -1,5 +1,6 @@
 export const ModerationActionType = Object.freeze({
   Ban: "ban",
+  Softban: "softban",
   Kick: "kick",
   Mute: "mute",
   Warn: "warn"
