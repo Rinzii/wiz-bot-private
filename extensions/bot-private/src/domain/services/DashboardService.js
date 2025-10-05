@@ -49,8 +49,9 @@ export class DashboardService {
     this.#app = express();
     this.#app.disable("x-powered-by");
 
-    if (this.#config.trustProxy) {
-      this.#app.set("trust proxy", this.#config.trustProxy === true ? 1 : this.#config.trustProxy);
+    const trustProxySetting = this.#config.trustProxy;
+    if (trustProxySetting) {
+      this.#app.set("trust proxy", trustProxySetting === true ? 1 : trustProxySetting);
     }
 
     this.#app.use(helmet({
@@ -99,6 +100,7 @@ export class DashboardService {
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
+      proxy: Boolean(trustProxySetting),
       cookie: {
         httpOnly: true,
         sameSite: "strict",
@@ -374,6 +376,19 @@ export class DashboardService {
       .some((type) => type === "text/html" || type === "application/xhtml+xml");
   }
 
+  #requestAppearsSecure(req) {
+    if (!req) return false;
+    if (req.secure) return true;
+    const forwarded = req.headers?.["x-forwarded-proto"];
+    if (typeof forwarded === "string" && forwarded.length > 0) {
+      return forwarded
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .includes("https");
+    }
+    return false;
+  }
+
   #createRateLimiter(options, metricKey) {
     if (!options || typeof options !== "object") return null;
     const windowMs = Number.isFinite(options.windowMs) ? Math.max(1, options.windowMs) : null;
@@ -429,6 +444,32 @@ export class DashboardService {
     };
 
     this.#logger?.info?.("dashboard.login_attempt", attemptContext);
+
+    const requiresSecureCookies = this.#config.secureCookies === true;
+    if (requiresSecureCookies) {
+      const requestLooksSecure = this.#requestAppearsSecure(req);
+      if (!requestLooksSecure) {
+        this.#logger?.warn?.("dashboard.login_failed", {
+          ...attemptContext,
+          reason: "insecure_transport"
+        });
+        res.status(400).json({
+          error: "Secure cookies are enabled; access the dashboard over HTTPS or disable PRIVATE_DASHBOARD_SECURE_COOKIES."
+        });
+        return;
+      }
+
+      if (!req.secure && requestLooksSecure && !this.#config.trustProxy) {
+        this.#logger?.error?.("dashboard.login_failed", {
+          ...attemptContext,
+          reason: "proxy_not_trusted"
+        });
+        res.status(400).json({
+          error: "Secure cookies are enabled, but the proxy is not trusted. Set PRIVATE_DASHBOARD_TRUST_PROXY to trust the reverse proxy."
+        });
+        return;
+      }
+    }
 
     if (typeof username !== "string" || typeof password !== "string") {
       this.#logger?.warn?.("dashboard.login_failed", {
