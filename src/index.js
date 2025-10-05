@@ -11,6 +11,7 @@ import { AntiSpamService } from "./services/AntiSpamService.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./core/loader.js";
 import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
+import { ModerationLogService } from "./services/ModerationLogService.js";
 
 async function main() {
   await connectMongo();
@@ -24,8 +25,15 @@ async function main() {
   container.set(TOKENS.DebugState, debugState);
 
   // Core services
-  container.set(TOKENS.WarningService, new WarningService());
-  container.set(TOKENS.ModerationService, new ModerationService(logger));
+  const moderationLogService = new ModerationLogService();
+  container.set(TOKENS.ModerationLogService, moderationLogService);
+
+  const warningService = new WarningService(moderationLogService);
+  container.set(TOKENS.WarningService, warningService);
+
+  const moderationService = new ModerationService(logger, moderationLogService);
+  container.set(TOKENS.ModerationService, moderationService);
+
   container.set(TOKENS.ChannelMapService, new ChannelMapService());
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
@@ -43,6 +51,8 @@ async function main() {
   const client = new Client({ intents: [...intents], partials: [...partials] });
   client.container = container;
   client.commands = new Map();
+
+  moderationService.setClient(client);
 
   // Commands
   await loadDirCommands(join(process.cwd(), "src", "commands"), client.commands);
