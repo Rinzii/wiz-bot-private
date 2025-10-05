@@ -7,6 +7,7 @@ import { WarningService } from "./services/WarningService.js";
 import { ModerationService } from "./services/ModerationService.js";
 import { ChannelMapService } from "./services/ChannelMapService.js";
 import { StaffRoleService } from "./services/StaffRoleService.js"; // ← added
+import { AntiSpamService } from "./services/AntiSpamService.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./core/loader.js";
 import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
@@ -27,6 +28,7 @@ async function main() {
   container.set(TOKENS.ModerationService, new ModerationService(logger));
   container.set(TOKENS.ChannelMapService, new ChannelMapService());
   container.set(TOKENS.StaffRoleService, new StaffRoleService()); // ← added
+  container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
