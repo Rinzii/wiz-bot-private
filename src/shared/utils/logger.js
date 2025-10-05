@@ -1,8 +1,18 @@
 // Minimal structured logger with in-memory ring buffer and optional Discord mirroring
 
+import chalk, { chalkStderr } from "chalk";
+
 const LEVELS = ["error", "warn", "info", "debug", "trace"];
 const MAX_BUFFER = 500;
 const DEFAULT_RATE_LIMIT = { intervalMs: 1_000, burst: 30 };
+
+const LEVEL_STYLE = {
+  error: ch => ch.red.bold,
+  warn:  ch => ch.yellow.bold,
+  info:  ch => ch.cyan,
+  debug: ch => ch.blue,
+  trace: ch => ch.gray,
+};
 
 const toPositive = (value, fallback) => {
   const num = Number(value);
@@ -44,9 +54,30 @@ export class Logger {
     this.buffer.push(entry);
     if (this.buffer.length > MAX_BUFFER) this.buffer.shift();
   }
-  #fmt(level, msg, meta) {
-    const ts = new Date().toISOString();
+  #fmt(ts, level, msg, meta) {
     return JSON.stringify({ ts, level, msg, ...meta });
+  }
+
+  #consoleLine(ts, level, msg, meta) {
+    const chalkTarget = level === "error" || level === "warn" ? chalkStderr : chalk;
+    const colorizeLevel = LEVEL_STYLE[level]?.(chalkTarget) ?? (text => text);
+    const tsPart = chalkTarget.gray(ts);
+    const levelLabel = colorizeLevel(level.toUpperCase().padEnd(5));
+    const message = typeof msg === "string" ? msg : JSON.stringify(msg);
+
+    let metaPart = "";
+    if (meta !== undefined && meta !== null) {
+      if (typeof meta === "string" || typeof meta === "number" || typeof meta === "boolean") {
+        metaPart = chalkTarget.dim(String(meta));
+      } else if (typeof meta === "object") {
+        const keys = Object.keys(meta);
+        if (keys.length > 0) {
+          metaPart = chalkTarget.dim(JSON.stringify(meta));
+        }
+      }
+    }
+
+    return metaPart ? `${tsPart} ${levelLabel} ${message} ${metaPart}` : `${tsPart} ${levelLabel} ${message}`;
   }
   #consumeRateLimit() {
     const rl = this.rateLimit;
@@ -80,13 +111,20 @@ export class Logger {
   }
 
   async #write(level, msg, meta = {}, { mirror = true, pushToBuffer = true } = {}) {
-    const line = this.#fmt(level, msg, meta);
-    if (level === "error") console.error(line);
-    else if (level === "warn") console.warn(line);
-    else console.log(line);
+    const ts = new Date().toISOString();
+    const line = this.#fmt(ts, level, msg, meta);
+    const consoleLine = this.#consoleLine(ts, level, msg, meta);
+    const streamIsTTY = level === "error" || level === "warn"
+      ? Boolean(process.stderr?.isTTY)
+      : Boolean(process.stdout?.isTTY);
+    const output = streamIsTTY ? consoleLine : line;
+
+    if (level === "error") console.error(output);
+    else if (level === "warn") console.warn(output);
+    else console.log(output);
 
     if (pushToBuffer) {
-      this.#push({ ts: new Date().toISOString(), level, msg, meta });
+      this.#push({ ts, level, msg, meta });
     }
 
     if (mirror && this.mirrorFn && this.#enabled(level)) {
