@@ -10,6 +10,7 @@ import { StaffRoleService } from "../domain/services/StaffRoleService.js";
 import { AntiSpamService } from "../domain/services/AntiSpamService.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./registry/loader.js";
 import { Logger } from "../shared/utils/logger.js";
+import { formatDuration } from "../shared/utils/time.js";
 import mongoose from "mongoose";
 import { ModerationLogService } from "../domain/services/ModerationLogService.js";
 import { RuntimeModerationState } from "../domain/services/RuntimeModerationState.js";
@@ -19,6 +20,8 @@ import { VirusTotalService } from "../domain/services/VirusTotalService.js";
 import { MentionTrackerService } from "../domain/services/MentionTrackerService.js";
 import { DisplayNamePolicyService } from "../domain/services/DisplayNamePolicyService.js";
 import { GuildConfigService } from "../domain/services/GuildConfigService.js";
+import { WarningModel } from "../infrastructure/database/models/Warning.js";
+import { ModerationActionModel } from "../infrastructure/database/models/ModerationAction.js";
 
 async function main() {
   await connectMongo();
@@ -87,10 +90,23 @@ async function main() {
   });
   container.set(TOKENS.DisplayNamePolicyService, displayNamePolicyService);
 
+  const pluginContext = {
+    config: CONFIG,
+    tokens: TOKENS,
+    loggerClass: Logger,
+    models: {
+      WarningModel,
+      ModerationActionModel
+    },
+    helpers: {
+      formatDuration
+    }
+  };
+
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
   const regs = await loadPlugins(pluginDirs);
-  for (const r of regs) if (typeof r.register === "function") await r.register(container);
+  for (const r of regs) if (typeof r.register === "function") await r.register(container, pluginContext);
 
   // Intents/partials
   const intents = new Set([GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]);
