@@ -63,8 +63,8 @@ test("names with three consecutive printable ASCII are allowed", () => {
   assert.equal(isValidName("😀abc😀"), true);
 });
 
-test("normalizeName falls back to Monke when transliteration is empty", () => {
-  assert.equal(normalizeName("   ", "   "), "Monke");
+test("normalizeName falls back to User when transliteration is empty", () => {
+  assert.equal(normalizeName("   ", "   "), "User");
 });
 
 test("invalid names without printable ASCII are replaced", async () => {
