@@ -7,6 +7,11 @@
   "mongo": { "uri": "mongodb://localhost:27017/discord_modbot" },
   "privateModuleDirs": ["modules/bot-private"],
   "modLogChannelId": "123456789012345678",
+  "brandNew": {
+    "enabled": true,
+    "thresholdMs": 1800000,
+    "alertChannelId": "123456789012345678"
+  },
   "antiSpam": {
     "msgWindowMs": 15000,
     "msgMaxInWindow": 10,

@@ -20,6 +20,15 @@ const toNumber = (v, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const toBoolean = (v, fallback) => {
+  if (v === undefined || v === null || v === "") return fallback;
+  if (typeof v === "boolean") return v;
+  const lower = String(v).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on", "enable", "enabled"].includes(lower)) return true;
+  if (["false", "0", "no", "n", "off", "disable", "disabled"].includes(lower)) return false;
+  return fallback;
+};
+
 const antiSpamDefaults = {
   msgWindowMs: 15_000,
   msgMaxInWindow: 10,
@@ -27,6 +36,12 @@ const antiSpamDefaults = {
   linkMaxInWindow: 6
 };
 const antiSpamFileCfg = fileCfg?.antiSpam || {};
+const brandNewDefaults = {
+  enabled: true,
+  thresholdMs: 30 * 60_000,
+  alertChannelId: ""
+};
+const brandNewFileCfg = fileCfg?.brandNew || {};
 
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
@@ -42,6 +57,11 @@ export const CONFIG = {
     msgMaxInWindow: toNumber(envOr("ANTISPAM_MSG_MAX", antiSpamFileCfg.msgMaxInWindow ?? antiSpamDefaults.msgMaxInWindow), antiSpamDefaults.msgMaxInWindow),
     linkWindowMs: toNumber(envOr("ANTISPAM_LINK_WINDOW_MS", antiSpamFileCfg.linkWindowMs ?? antiSpamDefaults.linkWindowMs), antiSpamDefaults.linkWindowMs),
     linkMaxInWindow: toNumber(envOr("ANTISPAM_LINK_MAX", antiSpamFileCfg.linkMaxInWindow ?? antiSpamDefaults.linkMaxInWindow), antiSpamDefaults.linkMaxInWindow)
+  },
+  brandNew: {
+    enabled: toBoolean(envOr("BRAND_NEW_ENABLED", brandNewFileCfg.enabled ?? brandNewDefaults.enabled), brandNewDefaults.enabled),
+    thresholdMs: toNumber(envOr("BRAND_NEW_THRESHOLD_MS", brandNewFileCfg.thresholdMs ?? brandNewDefaults.thresholdMs), brandNewDefaults.thresholdMs),
+    alertChannelId: envOr("BRAND_NEW_ALERT_CHANNEL_ID", brandNewFileCfg.alertChannelId ?? brandNewDefaults.alertChannelId) || ""
   }
 };
 
