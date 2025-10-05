@@ -13,6 +13,7 @@ import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
 import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
+import { StaffMemberLogService } from "./services/StaffMemberLogService.js";
 import { AllowedInviteService } from "./services/AllowedInviteService.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
 
@@ -37,10 +38,16 @@ async function main() {
   const moderationService = new ModerationService(logger, moderationLogService);
   container.set(TOKENS.ModerationService, moderationService);
 
-  container.set(TOKENS.ChannelMapService, new ChannelMapService());
+  const channelMapService = new ChannelMapService();
+  container.set(TOKENS.ChannelMapService, channelMapService);
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
+  container.set(TOKENS.StaffMemberLogService, new StaffMemberLogService({
+    channelMapService,
+    fallbackChannelId: CONFIG.channels?.staffMemberLogId || "",
+    logger
+  }));
   const allowedInviteService = new AllowedInviteService();
   container.set(TOKENS.AllowedInviteService, allowedInviteService);
 
