@@ -16,6 +16,7 @@ export class DashboardService {
   #client;
   #app;
   #sessionSecret;
+  #warnedPlaintextPassword;
 
   constructor({ config, logger, warningModel, moderationActionModel }) {
     this.#logger = logger;
@@ -23,6 +24,7 @@ export class DashboardService {
     this.#warningModel = warningModel;
     this.#moderationActionModel = moderationActionModel;
     this.#sessionSecret = null;
+    this.#warnedPlaintextPassword = false;
   }
 
   setClient(client) {
@@ -355,13 +357,7 @@ export class DashboardService {
       return;
     }
 
-    let passwordMatches = false;
-    try {
-      passwordMatches = await bcrypt.compare(providedPassword, this.#config.passwordHash);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.#logger?.error?.("dashboard.password_compare_error", { error: message });
-    }
+    const passwordMatches = await this.#verifyPassword(providedPassword);
 
     const usernameMatches = this.#safeCompare(providedUsername, this.#config.username);
 
@@ -393,6 +389,33 @@ export class DashboardService {
     });
   }
 
+  async #verifyPassword(providedPassword) {
+    const secret = this.#config.passwordHash;
+    if (typeof secret !== "string" || !secret) return false;
+
+    if (this.#looksLikeBcryptHash(secret)) {
+      try {
+        return await bcrypt.compare(providedPassword, secret);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.#logger?.error?.("dashboard.password_compare_error", { error: message });
+        return false;
+      }
+    }
+
+    if (!this.#warnedPlaintextPassword) {
+      this.#warnedPlaintextPassword = true;
+      this.#logger?.warn?.("dashboard.password_hash.unhashed", {
+        message:
+          "privateDashboard.passwordHash does not appear to be a bcrypt hash; falling back to constant-time string comparison.",
+        remediation:
+          "Generate a bcrypt hash for the dashboard password and set PRIVATE_DASHBOARD_PASSWORD_HASH to the hashed value."
+      });
+    }
+
+    return this.#safeCompare(providedPassword, secret);
+  }
+
   #safeCompare(a, b) {
     if (typeof a !== "string" || typeof b !== "string") return false;
     const bufferA = Buffer.from(a);
@@ -403,6 +426,11 @@ export class DashboardService {
     bufferA.copy(paddedA);
     bufferB.copy(paddedB);
     return crypto.timingSafeEqual(paddedA, paddedB) && bufferA.length === bufferB.length;
+  }
+
+  #looksLikeBcryptHash(value) {
+    if (typeof value !== "string") return false;
+    return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
   }
 
   #getSessionSecret() {
