@@ -29,6 +29,21 @@ const toBoolean = (v, fallback) => {
   return fallback;
 };
 
+const parseColor = (value, fallback) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return fallback;
+    if (/^#?[0-9a-f]{6}$/i.test(trimmed)) {
+      return Number.parseInt(trimmed.replace("#", ""), 16);
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric) && numeric >= 0) return Math.floor(numeric);
+  }
+  return fallback;
+};
+
 const antiSpamDefaults = {
   msgWindowMs: 15_000,
   msgMaxInWindow: 10,
@@ -42,6 +57,14 @@ const brandNewDefaults = {
   alertChannelId: ""
 };
 const brandNewFileCfg = fileCfg?.brandNew || {};
+const channelFileCfg = fileCfg?.channels || {};
+const colorFileCfg = fileCfg?.colors || {};
+
+const DEFAULT_ALERT_COLOR = 0xF05A66;
+
+const staffActionLogId = envOr("CHANNELS__STAFF_ACTION_LOG", channelFileCfg.staff_action_log || "");
+const alertColorRaw = envOr("COLORS__ALERT_COLOR", colorFileCfg.alert_color ?? "");
+const alertColor = parseColor(alertColorRaw, DEFAULT_ALERT_COLOR);
 
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
@@ -62,6 +85,12 @@ export const CONFIG = {
     enabled: toBoolean(envOr("BRAND_NEW_ENABLED", brandNewFileCfg.enabled ?? brandNewDefaults.enabled), brandNewDefaults.enabled),
     thresholdMs: toNumber(envOr("BRAND_NEW_THRESHOLD_MS", brandNewFileCfg.thresholdMs ?? brandNewDefaults.thresholdMs), brandNewDefaults.thresholdMs),
     alertChannelId: envOr("BRAND_NEW_ALERT_CHANNEL_ID", brandNewFileCfg.alertChannelId ?? brandNewDefaults.alertChannelId) || ""
+  },
+  channels: {
+    staffActionLogId: staffActionLogId || ""
+  },
+  colors: {
+    alert: alertColor
   }
 };
 

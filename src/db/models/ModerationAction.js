@@ -25,5 +25,12 @@ ModerationActionSchema.index({ guildId: 1, action: 1, createdAt: -1 });
 ModerationActionSchema.index({ guildId: 1, caseNumber: 1 }, { unique: true });
 ModerationActionSchema.index({ action: 1, completedAt: 1, expiresAt: 1 });
 ModerationActionSchema.index({ expungedAt: 1 });
+ModerationActionSchema.index({
+  guildId: 1,
+  userId: 1,
+  action: 1,
+  expungedAt: 1,
+  createdAt: -1,
+});
 
 export const ModerationActionModel = model("ModerationAction", ModerationActionSchema);
