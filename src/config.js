@@ -65,6 +65,22 @@ const DEFAULT_ALERT_COLOR = 0xF05A66;
 const staffActionLogId = envOr("CHANNELS__STAFF_ACTION_LOG", channelFileCfg.staff_action_log || "");
 const alertColorRaw = envOr("COLORS__ALERT_COLOR", colorFileCfg.alert_color ?? "");
 const alertColor = parseColor(alertColorRaw, DEFAULT_ALERT_COLOR);
+const fileScannerDefaults = {
+  enabled: true,
+  prefixBytes: 512,
+  staffFlagChannelKey: "flag_log",
+  staffActionChannelKey: "action_log",
+  vtActionThreshold: 5,
+  vtMuteDurationMs: 24 * 60 * 60_000
+};
+const fileScannerFileCfg = fileCfg?.fileScanner || {};
+const virusTotalDefaults = {
+  apiKey: "",
+  pollIntervalMs: 5000,
+  maxPolls: 12,
+  maxFileBytes: 32 * 1024 * 1024
+};
+const virusTotalFileCfg = fileScannerFileCfg?.virusTotal || fileCfg?.virusTotal || {};
 
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
@@ -91,6 +107,19 @@ export const CONFIG = {
   },
   colors: {
     alert: alertColor
+  fileScanner: {
+    enabled: toBoolean(envOr("FILE_SCANNER_ENABLED", fileScannerFileCfg.enabled ?? fileScannerDefaults.enabled), fileScannerDefaults.enabled),
+    prefixBytes: toNumber(envOr("FILE_SCANNER_PREFIX_BYTES", fileScannerFileCfg.prefixBytes ?? fileScannerDefaults.prefixBytes), fileScannerDefaults.prefixBytes),
+    staffFlagChannelKey: envOr("FILE_SCANNER_FLAG_CHANNEL_KEY", fileScannerFileCfg.staffFlagChannelKey ?? fileScannerDefaults.staffFlagChannelKey) || "",
+    staffActionChannelKey: envOr("FILE_SCANNER_ACTION_CHANNEL_KEY", fileScannerFileCfg.staffActionChannelKey ?? fileScannerDefaults.staffActionChannelKey) || "",
+    vtActionThreshold: toNumber(envOr("FILE_SCANNER_VT_THRESHOLD", fileScannerFileCfg.vtActionThreshold ?? fileScannerDefaults.vtActionThreshold), fileScannerDefaults.vtActionThreshold),
+    vtMuteDurationMs: toNumber(envOr("FILE_SCANNER_MUTE_DURATION_MS", fileScannerFileCfg.vtMuteDurationMs ?? fileScannerDefaults.vtMuteDurationMs), fileScannerDefaults.vtMuteDurationMs),
+    virusTotal: {
+      apiKey: envOr("VIRUSTOTAL_API_KEY", virusTotalFileCfg.apiKey ?? virusTotalDefaults.apiKey) || "",
+      pollIntervalMs: toNumber(envOr("VIRUSTOTAL_POLL_INTERVAL_MS", virusTotalFileCfg.pollIntervalMs ?? virusTotalDefaults.pollIntervalMs), virusTotalDefaults.pollIntervalMs),
+      maxPolls: toNumber(envOr("VIRUSTOTAL_MAX_POLLS", virusTotalFileCfg.maxPolls ?? virusTotalDefaults.maxPolls), virusTotalDefaults.maxPolls),
+      maxFileBytes: toNumber(envOr("VIRUSTOTAL_MAX_FILE_BYTES", virusTotalFileCfg.maxFileBytes ?? virusTotalDefaults.maxFileBytes), virusTotalDefaults.maxFileBytes)
+    }
   }
 };
 
