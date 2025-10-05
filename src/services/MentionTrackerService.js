@@ -19,12 +19,13 @@ const COLORS = {
 };
 
 export class MentionTrackerService {
-  constructor({ logger, channelMapService, staffRoleService, config = {}, fallbackChannelId = "" }) {
+  constructor({ logger, channelMapService, staffRoleService, config = {}, fallbackChannelId = "", fallbackChannelResolver = null }) {
     this.logger = logger;
     this.channelMapService = channelMapService;
     this.staffRoleService = staffRoleService;
     this.enabled = Boolean(config?.enabled);
     this.fallbackChannelId = fallbackChannelId || "";
+    this.fallbackChannelResolver = typeof fallbackChannelResolver === "function" ? fallbackChannelResolver : null;
     this.staffFlagChannelKey = config?.staffFlagChannelKey || "";
     this.extraChannelKeys = Array.isArray(config?.additionalFlagChannelKeys)
       ? config.additionalFlagChannelKeys.filter(Boolean)
@@ -255,14 +256,14 @@ export class MentionTrackerService {
       message.guild,
       this.channelMapService,
       keys,
-      this.fallbackChannelId
+      async (guild) => this.#resolveFallbackChannelId(guild)
     );
 
     if (!staffChannel) {
       this.logger?.warn?.("mention_tracker.flag_channel_missing", {
         guildId: message.guildId,
         keys,
-        fallbackId: this.fallbackChannelId
+        fallbackId: await this.#resolveFallbackChannelId(message.guild)
       });
       return;
     }
@@ -356,5 +357,22 @@ export class MentionTrackerService {
     }
 
     return true;
+  }
+
+  async #resolveFallbackChannelId(guild) {
+    if (this.fallbackChannelResolver) {
+      try {
+        const resolved = await this.fallbackChannelResolver(guild);
+        if (typeof resolved === "string") return resolved;
+      } catch (error) {
+        if (this.logger?.warn) {
+          await this.logger.warn("mention_tracker.fallback_error", {
+            guildId: guild?.id ?? null,
+            error: error instanceof Error ? error.message : String(error)
+          }).catch(() => {});
+        }
+      }
+    }
+    return this.fallbackChannelId;
   }
 }

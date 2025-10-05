@@ -21,5 +21,6 @@ export const TOKENS = {
   VirusTotalService: "VirusTotalService",
   MentionTrackerService: "MentionTrackerService",
   AllowedInviteService: "AllowedInviteService",
-  DisplayNamePolicyService: "DisplayNamePolicyService"
+  DisplayNamePolicyService: "DisplayNamePolicyService",
+  GuildConfigService: "GuildConfigService"
 };

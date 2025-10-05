@@ -78,7 +78,7 @@ async function handleRejoinAlert(member) {
   const action = normalizeAction(entry);
   const actionDisplay = ACTION_DISPLAY[action] ?? { past: "actioned", noun: "action" };
 
-  const channel = await resolveStaffActionChannel(guild, channelMap, logger);
+  const channel = await resolveStaffActionChannel(guild, channelMap, logger, container);
   if (!channel) return;
 
   if (!channel.isTextBased?.()) {
@@ -150,7 +150,7 @@ function normalizeAction(entry) {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
-async function resolveStaffActionChannel(guild, channelMap, logger) {
+async function resolveStaffActionChannel(guild, channelMap, logger, container) {
   const seen = new Set();
   const tryFetch = async (id) => {
     if (!id || seen.has(id)) return null;
@@ -178,7 +178,22 @@ async function resolveStaffActionChannel(guild, channelMap, logger) {
     }
   }
 
-  const candidates = [CONFIG?.channels?.staffActionLogId, CONFIG?.modLogChannelId];
+  const candidates = [];
+  if (container) {
+    try {
+      const gcs = container.get(TOKENS.GuildConfigService);
+      const dynamic = await gcs.getModLogChannelId(guild.id);
+      if (dynamic) candidates.push(dynamic);
+    } catch (err) {
+      if (logger?.warn) {
+        await logger.warn("moderation.rejoin_alert.config_lookup_failed", {
+          guildId: guild.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+  candidates.push(CONFIG?.channels?.staffActionLogId, CONFIG?.modLogChannelId);
   for (const id of candidates) {
     const ch = await tryFetch(id);
     if (ch?.isTextBased?.()) return ch;

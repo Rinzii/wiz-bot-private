@@ -25,6 +25,15 @@ async function resolveFlagLogChannel(message, container) {
   } catch {
     // ignore lookup errors
   }
+  if (!channelId) {
+    try {
+      const gcs = container.get(TOKENS.GuildConfigService);
+      const fallback = await gcs.getModLogChannelId(message.guildId);
+      if (fallback) channelId = fallback;
+    } catch {
+      // ignore resolution errors
+    }
+  }
   if (!channelId && CONFIG.modLogChannelId) channelId = CONFIG.modLogChannelId;
   if (!channelId) return null;
   const channel =

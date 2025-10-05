@@ -19,9 +19,10 @@ export class StaffMemberLogService {
   #missingWarned;
   #cache;
 
-  constructor({ channelMapService, fallbackChannelId = "", logger } = {}) {
+  constructor({ channelMapService, fallbackChannelId = "", fallbackChannelResolver = null, logger } = {}) {
     this.channelMapService = channelMapService;
     this.fallbackChannelId = typeof fallbackChannelId === "string" ? fallbackChannelId : "";
+    this.fallbackChannelResolver = typeof fallbackChannelResolver === "function" ? fallbackChannelResolver : null;
     this.logger = logger;
     this.#missingWarned = new Set();
     this.#cache = new Collection();
@@ -93,7 +94,8 @@ export class StaffMemberLogService {
       }
     }
 
-    const fallback = await tryFetch(this.fallbackChannelId);
+    const fallbackId = await this.#resolveFallbackId(guild).catch(() => this.fallbackChannelId);
+    const fallback = await tryFetch(fallbackId);
     if (fallback) {
       this.#cache.set(guild.id, { channel: fallback, resolvedAt: Date.now() });
       return fallback;
@@ -108,6 +110,24 @@ export class StaffMemberLogService {
     this.#missingWarned.add(guildId);
     if (this.logger?.warn) {
       this.logger.warn("staffMemberLog.missingChannel", { guildId }).catch(() => {});
+    }
+  }
+
+  async #resolveFallbackId(guild) {
+    if (!guild) return this.fallbackChannelId;
+    if (!this.fallbackChannelResolver) return this.fallbackChannelId;
+    try {
+      const result = await this.fallbackChannelResolver(guild);
+      if (typeof result === "string") return result;
+      return this.fallbackChannelId;
+    } catch (error) {
+      if (this.logger?.warn) {
+        await this.logger.warn("staffMemberLog.fallback.error", {
+          guildId: guild?.id ?? null,
+          error: error instanceof Error ? error.message : String(error)
+        }).catch(() => {});
+      }
+      return this.fallbackChannelId;
     }
   }
 }

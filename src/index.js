@@ -18,6 +18,7 @@ import { AllowedInviteService } from "./services/AllowedInviteService.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
 import { MentionTrackerService } from "./services/MentionTrackerService.js";
 import { DisplayNamePolicyService } from "./services/DisplayNamePolicyService.js";
+import { GuildConfigService } from "./services/GuildConfigService.js";
 
 async function main() {
   await connectMongo();
@@ -44,11 +45,17 @@ async function main() {
   container.set(TOKENS.ChannelMapService, channelMapService);
   const staffRoleService = new StaffRoleService();
   container.set(TOKENS.StaffRoleService, staffRoleService);
+  const guildConfigService = new GuildConfigService();
+  container.set(TOKENS.GuildConfigService, guildConfigService);
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
   container.set(TOKENS.StaffMemberLogService, new StaffMemberLogService({
     channelMapService,
-    fallbackChannelId: CONFIG.channels?.staffMemberLogId || "",
+    fallbackChannelResolver: async (guild) => {
+      if (!guild?.id) return CONFIG.channels?.staffMemberLogId || CONFIG.modLogChannelId || "";
+      const dynamicId = await guildConfigService.getModLogChannelId(guild.id);
+      return dynamicId || CONFIG.channels?.staffMemberLogId || CONFIG.modLogChannelId || "";
+    },
     logger
   }));
   const allowedInviteService = new AllowedInviteService();
@@ -66,7 +73,11 @@ async function main() {
     channelMapService,
     staffRoleService,
     config: CONFIG.mentionTracker || {},
-    fallbackChannelId: CONFIG.modLogChannelId
+    fallbackChannelResolver: async (guild) => {
+      if (!guild?.id) return CONFIG.modLogChannelId || "";
+      const dynamicId = await guildConfigService.getModLogChannelId(guild.id);
+      return dynamicId || CONFIG.modLogChannelId || "";
+    }
   });
   container.set(TOKENS.MentionTrackerService, mentionTrackerService);
 
