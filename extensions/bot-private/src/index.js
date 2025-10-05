@@ -4,6 +4,33 @@ import { PRIVATE_TOKENS } from "./domain/services/tokens.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
+const getDashboardUrl = (service, dashboardConfig) => {
+  const directUrl = service?.getUrl?.();
+  if (directUrl) return directUrl;
+
+  const port = Number.isFinite(dashboardConfig?.port)
+    ? dashboardConfig.port
+    : 3080;
+
+  let basePath = typeof dashboardConfig?.basePath === "string"
+    ? dashboardConfig.basePath.trim()
+    : "/";
+
+  if (!basePath.startsWith("/")) basePath = `/${basePath}`;
+  if (basePath.length > 1 && basePath.endsWith("/")) {
+    basePath = basePath.slice(0, -1);
+  }
+
+  const pathname = basePath || "/";
+
+  try {
+    return new URL(pathname, `http://localhost:${port}`).toString();
+  } catch {
+    const suffix = pathname === "/" ? "/" : pathname;
+    return `http://localhost:${port}${suffix}`;
+  }
+};
+
 export const PLUGIN_META = {
   name: "bot-private",
   version: "1.0.0",
@@ -130,7 +157,11 @@ export default {
 
         try {
           await dashboardService.start();
-          logger?.info?.("dashboard.ready", { port: config.privateDashboard?.port });
+          const dashboardUrl = getDashboardUrl(dashboardService, config.privateDashboard);
+          logger?.info?.("dashboard.ready", {
+            port: config.privateDashboard?.port,
+            url: dashboardUrl
+          });
         } catch (error) {
           logger?.error?.("dashboard.failed_to_start", { error: String(error?.message || error) });
         }
