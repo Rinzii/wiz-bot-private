@@ -20,10 +20,23 @@ async function main() {
   } = await registerCoreServices({ container, config: CONFIG });
   void allowedInviteService;
 
+  const pluginContext = {
+    config: CONFIG,
+    tokens: TOKENS,
+    loggerClass: Logger,
+    models: {
+      WarningModel,
+      ModerationActionModel
+    },
+    helpers: {
+      formatDuration
+    }
+  };
+
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
   const regs = await loadPlugins(pluginDirs);
-  for (const r of regs) if (typeof r.register === "function") await r.register(container);
+  for (const r of regs) if (typeof r.register === "function") await r.register(container, pluginContext);
 
   // Intents/partials
   const intents = new Set([GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]);
@@ -34,10 +47,10 @@ async function main() {
   client.container = container;
   client.commands = new Map();
 
-  if (container.has(TOKENS.DashboardService)) {
+  const dashboardService = container.getOptional(TOKENS.DashboardService);
+  if (dashboardService) {
     try {
-      const dashboardService = container.get(TOKENS.DashboardService);
-      dashboardService?.setClient?.(client);
+      dashboardService.setClient?.(client);
     } catch (error) {
       logger?.error?.("dashboard.attach_failed", { error: String(error?.message || error) });
     }

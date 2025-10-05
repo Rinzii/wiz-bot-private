@@ -1,12 +1,21 @@
 // Minimal, framework-agnostic plugin contract
 
 /**
+ * @typedef {Object} PluginContext
+ * @property {typeof import("../../config/index.js").CONFIG} config
+ * @property {typeof import("../container/index.js").TOKENS} tokens
+ * @property {typeof import("../../shared/utils/logger.js").Logger} loggerClass
+ * @property {{ [key: string]: any }} [helpers]
+ * @property {{ [key: string]: any }} [models]
+ */
+
+/**
  * @typedef {Object} PluginRegistration
  * @property {string[]} [commandDirs]  absolute or relative directories with command .js files (default export)
  * @property {string[]} [eventDirs]    directories with event .js files (default export {name, once, execute})
  * @property {number[]} [intents]      extra Discord intents needed by this plugin
  * @property {number[]} [partials]     extra Discord partials needed by this plugin
- * @property {(container:{set:(k:string,v:any)=>void, get:(k:string)=>any})=>Promise<void>|void} [register]
+ * @property {(container:{set:(k:string,v:any)=>void, get:(k:string)=>any}, context:PluginContext)=>Promise<void>|void} [register]
  */
 
 /**

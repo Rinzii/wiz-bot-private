@@ -26,7 +26,7 @@
     "vtActionThreshold": 5,
     "vtMuteDurationMs": 86400000,
     "virusTotal": {
-      "apiKey": "6c472171a022e8fcfef5beaa14614923f7e14c72624b9bbcb434dc1922e0ba46",
+      "apiKey": "YOUR_VT_API_KEY",
       "pollIntervalMs": 5000,
       "maxPolls": 12,
       "maxFileBytes": 33554432

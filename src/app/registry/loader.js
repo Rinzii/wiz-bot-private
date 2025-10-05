@@ -84,11 +84,22 @@ export async function loadPlugins(pluginDirs = []) {
     if (!entry?.setup) return null;
 
     const reg = await entry.setup();
+    if (!reg) return null;
+
     // normalize
     reg.commandDirs = reg.commandDirs || [];
     reg.eventDirs = reg.eventDirs || [];
     reg.intents = reg.intents || [];
     reg.partials = reg.partials || [];
+    if (typeof reg.register === "function") {
+      const originalRegister = reg.register;
+      reg.register = async (container, context) => {
+        if (originalRegister.length >= 2) {
+          return originalRegister(container, context);
+        }
+        return originalRegister(container);
+      };
+    }
     return reg;
   };
 
