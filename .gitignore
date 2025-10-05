@@ -1,3 +1,5 @@
+#modules/bot-private/**
+
 # Logs
 logs
 *.log
