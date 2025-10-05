@@ -11,23 +11,29 @@ async function collectVisible(interaction) {
   const byCat = new Map();
   const byName = new Map();
 
-  for (const [name, cmd] of interaction.client.commands.entries()) {
-    if (!cmd?.meta) continue; // only commands that opted into help
-    if (!hasDefaultPerms(interaction.member, cmd)) continue;
-    // eslint-disable-next-line no-await-in-loop
-    if (!(await hasAppLevelPerms(interaction, cmd))) continue;
+  const entries = [...interaction.client.commands.entries()];
+  const visibleRecords = await Promise.all(
+    entries.map(async ([name, cmd]) => {
+      if (!cmd?.meta) return null; // only commands that opted into help
+      if (!hasDefaultPerms(interaction.member, cmd)) return null;
+      if (!(await hasAppLevelPerms(interaction, cmd))) return null;
 
-    const meta = cmd.meta;
-    const rec = {
-      name,
-      desc: meta.description || cmd.data?.description || "—",
-      usage: meta.usage || `/${name}`,
-      examples: Array.isArray(meta.examples) ? meta.examples : [],
-      permissionsLabel: meta.permissions || null,
-      category: (meta.category || "general").toLowerCase()
-    };
+      const meta = cmd.meta;
+      return {
+        name,
+        desc: meta.description || cmd.data?.description || "—",
+        usage: meta.usage || `/${name}`,
+        examples: Array.isArray(meta.examples) ? meta.examples : [],
+        permissionsLabel: meta.permissions || null,
+        category: (meta.category || "general").toLowerCase()
+      };
+    })
+  );
 
-    byName.set(name, rec);
+  for (const rec of visibleRecords) {
+    if (!rec) continue;
+
+    byName.set(rec.name, rec);
     if (!byCat.has(rec.category)) byCat.set(rec.category, []);
     byCat.get(rec.category).push(rec);
   }

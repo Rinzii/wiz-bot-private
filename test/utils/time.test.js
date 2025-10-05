@@ -55,7 +55,7 @@ test("scheduleWithMaxTimeout respects cancellation", async () => {
   try {
     const handles = new Map();
     let nextHandle = 1;
-    globalThis.setTimeout = (fn, delay) => {
+    globalThis.setTimeout = (fn, _delay) => {
       const handle = nextHandle++;
       handles.set(handle, fn);
       return handle;

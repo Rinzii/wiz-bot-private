@@ -46,7 +46,7 @@ export default {
       }
 
       message = await channel.messages.fetch(messageId);
-    } catch (error) {
+    } catch {
       return interaction.reply({ flags: MessageFlags.Ephemeral, content: "Failed to fetch message." });
     }
 
