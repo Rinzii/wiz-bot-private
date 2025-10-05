@@ -11,10 +11,10 @@ export function formatMemberLine(member, user) {
 
 export function getLogger(container) {
   if (!container) return null;
-  try { return container.get(TOKENS.Logger); } catch { return null; }
+  return container.getOptional?.(TOKENS.Logger) ?? null;
 }
 
 export function getStaffMemberLogService(container) {
   if (!container) return null;
-  try { return container.get(TOKENS.StaffMemberLogService); } catch { return null; }
+  return container.getOptional?.(TOKENS.StaffMemberLogService) ?? null;
 }
