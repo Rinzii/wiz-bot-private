@@ -43,31 +43,6 @@ const brandNewDefaults = {
 };
 const brandNewFileCfg = fileCfg?.brandNew || {};
 
-const rolesFileCfg = fileCfg?.roles || {};
-const rawSkillRoles = Array.isArray(rolesFileCfg?.skillRoles) ? rolesFileCfg.skillRoles : [];
-const skillRoles = rawSkillRoles
-  .map((entry) => {
-    if (!entry) return null;
-    if (typeof entry === "string") {
-      const val = String(entry).trim();
-      return val ? { name: val, roleId: val } : null;
-    }
-    if (Array.isArray(entry) && entry.length >= 2) {
-      const name = String(entry[0] ?? "").trim();
-      const roleId = String(entry[1] ?? "").trim();
-      return name && roleId ? { name, roleId } : null;
-    }
-    if (typeof entry === "object") {
-      const name = String(("name" in entry ? entry.name : entry.label) ?? "").trim();
-      const roleId = String(("roleId" in entry ? entry.roleId : entry.id) ?? "").trim();
-      if (!name || !roleId) return null;
-      return { name, roleId };
-    }
-    return null;
-  })
-  .filter((entry) => entry && entry.name && entry.roleId);
-const skillRoleThreshold = String(rolesFileCfg?.skillRoleThreshold || "Proficient").trim() || "Proficient";
-
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
   clientId: envOr("DISCORD_CLIENT_ID", fileCfg?.discord?.clientId || ""),
@@ -87,10 +62,6 @@ export const CONFIG = {
     enabled: toBoolean(envOr("BRAND_NEW_ENABLED", brandNewFileCfg.enabled ?? brandNewDefaults.enabled), brandNewDefaults.enabled),
     thresholdMs: toNumber(envOr("BRAND_NEW_THRESHOLD_MS", brandNewFileCfg.thresholdMs ?? brandNewDefaults.thresholdMs), brandNewDefaults.thresholdMs),
     alertChannelId: envOr("BRAND_NEW_ALERT_CHANNEL_ID", brandNewFileCfg.alertChannelId ?? brandNewDefaults.alertChannelId) || ""
-  },
-  roles: {
-    skillRoles,
-    skillRoleThreshold
   }
 };
 

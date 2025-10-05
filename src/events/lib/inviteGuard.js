@@ -6,20 +6,6 @@ import { findInviteMatches } from "../../utils/invites.js";
 const STAFF_KEYS = ["admin", "mod", "special"];
 const MOD_PERM = PermissionsBitField.Flags.ModerateMembers;
 
-const SKILL_ROLE_THRESHOLD = (CONFIG.roles?.skillRoleThreshold || "Proficient").toLowerCase();
-const ORDERED_SKILL_ROLES = Array.isArray(CONFIG.roles?.skillRoles)
-  ? CONFIG.roles.skillRoles
-      .map((entry) => ({ name: String(entry?.name || "").trim(), roleId: String(entry?.roleId || entry?.id || "").trim() }))
-      .filter((entry) => entry.name && entry.roleId)
-  : [];
-
-const TRUSTED_SKILL_ROLE_IDS = (() => {
-  if (!ORDERED_SKILL_ROLES.length) return new Set();
-  const thresholdIndex = ORDERED_SKILL_ROLES.findIndex((entry) => entry.name.toLowerCase() === SKILL_ROLE_THRESHOLD);
-  if (thresholdIndex === -1) return new Set();
-  return new Set(ORDERED_SKILL_ROLES.slice(thresholdIndex).map((entry) => entry.roleId));
-})();
-
 async function resolveMember(message) {
   if (message.member) return message.member;
   if (!message.guild) return null;
@@ -28,16 +14,6 @@ async function resolveMember(message) {
   } catch {
     return null;
   }
-}
-
-function memberHasTrustedSkillRole(member) {
-  if (!member || !TRUSTED_SKILL_ROLE_IDS.size) return false;
-  const cache = member.roles?.cache;
-  if (!cache?.size) return false;
-  for (const roleId of TRUSTED_SKILL_ROLE_IDS) {
-    if (cache.has(roleId)) return true;
-  }
-  return false;
 }
 
 async function resolveFlagLogChannel(message, container) {
@@ -122,8 +98,6 @@ export async function enforceInvitePolicy(message, source = "unknown") {
   const roleCache = member?.roles?.cache;
   const hasStaffRole = staffRoleIds.some((id) => roleCache?.has(id));
   if (hasStaffRole) return;
-
-  if (memberHasTrustedSkillRole(member)) return;
 
   const allowedInviteService = container.get(TOKENS.AllowedInviteService);
   const violating = matches.find((match) => !allowedInviteService.isAllowed(match.code));
