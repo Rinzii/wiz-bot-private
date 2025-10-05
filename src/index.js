@@ -6,7 +6,7 @@ import { Container, TOKENS } from "./container.js";
 import { WarningService } from "./services/WarningService.js";
 import { ModerationService } from "./services/ModerationService.js";
 import { ChannelMapService } from "./services/ChannelMapService.js";
-import { StaffRoleService } from "./services/StaffRoleService.js"; // ← added
+import { StaffRoleService } from "./services/StaffRoleService.js";
 import { AntiSpamService } from "./services/AntiSpamService.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./core/loader.js";
 import { Logger } from "./utils/logger.js";
@@ -20,14 +20,14 @@ async function main() {
   // Logger + Debug state
   const debugState = { channelId: CONFIG.debugChannelId || "" };
   const logger = new Logger({ level: CONFIG.logLevel, mirrorFn: null });
-  container.set("Logger", logger);
-  container.set("DebugState", debugState);
+  container.set(TOKENS.Logger, logger);
+  container.set(TOKENS.DebugState, debugState);
 
   // Core services
   container.set(TOKENS.WarningService, new WarningService());
   container.set(TOKENS.ModerationService, new ModerationService(logger));
   container.set(TOKENS.ChannelMapService, new ChannelMapService());
-  container.set(TOKENS.StaffRoleService, new StaffRoleService()); // ← added
+  container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
 
   // Plugins

@@ -8,6 +8,8 @@ export class Container {
 }
 
 export const TOKENS = {
+  Logger: "Logger",
+  DebugState: "DebugState",
   WarningService: "WarningService",
   ModerationService: "ModerationService",
   ChannelMapService: "ChannelMapService",

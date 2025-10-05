@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, SlashCommandBuilder, ChannelType, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { infoEmbed, listEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -33,8 +34,8 @@ export default {
   async execute(interaction) {
     if (!interaction.inGuild()) return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Debug", "Guild only.")] });
 
-    const logger = interaction.client.container.get("Logger");
-    const debugState = interaction.client.container.get("DebugState");
+    const logger = interaction.client.container.get(TOKENS.Logger);
+    const debugState = interaction.client.container.get(TOKENS.DebugState);
     const sub = interaction.options.getSubcommand();
 
     if (sub === "status") {

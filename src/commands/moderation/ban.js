@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { infoEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -14,7 +15,7 @@ export default {
     const member = await interaction.guild.members.fetch(user.id).catch(() => null);
     if (!member) return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Ban", "User not in guild.")] });
 
-    const mod = interaction.client.container.get("ModerationService");
+    const mod = interaction.client.container.get(TOKENS.ModerationService);
     try {
       await mod.ban(member, reason);
       return interaction.reply({ embeds: [infoEmbed("Ban", `Banned **${user.tag}**\n**Reason:** ${reason}`)] });

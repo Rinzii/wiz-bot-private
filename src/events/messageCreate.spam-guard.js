@@ -33,7 +33,7 @@ export default {
     const container = message.client?.container;
     if (!container) return;
 
-    const logger = container.get("Logger");
+    const logger = container.get(TOKENS.Logger);
     const member = await ensureGuildMember(message);
     if (!member) return;
 
