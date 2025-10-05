@@ -7,7 +7,8 @@
     "dev": "node --env-file=.env src/index.js",
     "deploy": "node --env-file=.env scripts/deploy-commands.js",
     "start": "node src/index.js",
-    "check:commands": "node scripts/check-commands.js"
+    "check:commands": "node scripts/check-commands.js",
+    "test": "node --test"
   },
   "dependencies": {
     "any-ascii": "^0.3.3",
