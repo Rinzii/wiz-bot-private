@@ -1,6 +1,6 @@
 import { PermissionFlagsBits, SlashCommandBuilder, ChannelType, MessageFlags } from "discord.js";
 import { infoEmbed } from "../../utils/embeds.js";
-import { GuildConfigModel } from "../../db/models/GuildConfig.js";
+import { TOKENS } from "../../container.js";
 
 export default {
   data: new SlashCommandBuilder()
@@ -19,9 +19,11 @@ export default {
 
     const sub = interaction.options.getSubcommand();
 
+    const guildConfigService = interaction.client.container.get(TOKENS.GuildConfigService);
+
     if (sub === "where") {
-      const config = await GuildConfigModel.findOne({ guildId: interaction.guildId }).lean();
-      const channel = config?.modLogChannelId ? `<#${config.modLogChannelId}>` : "Not configured.";
+      const channelId = await guildConfigService.getModLogChannelId(interaction.guildId);
+      const channel = channelId ? `<#${channelId}>` : "Not configured.";
       return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Modlog", `Current channel: ${channel}`)] });
     }
 
@@ -30,11 +32,7 @@ export default {
       return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Modlog", "Select a text channel.")] });
     }
 
-    await GuildConfigModel.findOneAndUpdate(
-      { guildId: interaction.guildId },
-      { modLogChannelId: channel.id },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    await guildConfigService.setModLogChannelId(interaction.guildId, channel.id);
 
     return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Modlog", `Set modlog channel to ${channel}.`)] });
   },

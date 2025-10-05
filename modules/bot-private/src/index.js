@@ -36,14 +36,22 @@ export default {
         const { TOKENS } = await import(fromSrc("container.js"));
         const { formatDuration } = await import(fromSrc("utils/time.js"));
 
+        const guildConfigService = container.get(TOKENS.GuildConfigService);
+        const cms = container.get(TOKENS.ChannelMapService);
+
         const getModLog = async (g) => {
           try {
-            const cms = container.get(TOKENS.ChannelMapService);
             const candidates = ["bot_log", "member_log", "action_log", "mod_log"];
             let id = null;
             for (const key of candidates) {
               const m = await cms.get(g.id, key);
               if (m?.channelId) { id = m.channelId; break; }
+            }
+            if (!id) {
+              try {
+                const dynamic = await guildConfigService.getModLogChannelId(g.id);
+                if (dynamic) id = dynamic;
+              } catch {/* ignore */}
             }
             const finalId = id || CONFIG.modLogChannelId;
             if (!finalId) return null;
@@ -55,8 +63,6 @@ export default {
         const logger = container.get(TOKENS.Logger);
 
         const tracker = new MemberTracker({ logger });
-
-        const cms = container.get(TOKENS.ChannelMapService);
         const brandNewCfg = CONFIG.brandNew || {};
         const brandNewChannelKeys = ["brand_new_alert", "member_log", "join_boost_log", "bot_log", "action_log", "mod_log"];
 
@@ -79,14 +85,15 @@ export default {
             } catch {/* ignore lookup errors */}
           }
 
-          const preferredId = brandNewCfg.alertChannelId || null;
-          if (preferredId) {
-            const direct = await tryFetch(preferredId);
-            if (direct) return direct;
-          }
+          const fallbackIds = [];
+          if (brandNewCfg.alertChannelId) fallbackIds.push(brandNewCfg.alertChannelId);
+          try {
+            const dynamic = await guildConfigService.getModLogChannelId(guild.id);
+            if (dynamic) fallbackIds.push(dynamic);
+          } catch {/* ignore */}
+          if (CONFIG.modLogChannelId) fallbackIds.push(CONFIG.modLogChannelId);
 
-          const fallbackId = CONFIG.modLogChannelId;
-          if (fallbackId) {
+          for (const fallbackId of fallbackIds) {
             const fallback = await tryFetch(fallbackId);
             if (fallback) return fallback;
           }

@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, MessageFlags, EmbedBuilder } from "discord.js";
 import { infoEmbed } from "../../utils/embeds.js";
-import { GuildConfigModel } from "../../db/models/GuildConfig.js";
+import { TOKENS } from "../../container.js";
 
 export default {
   data: new SlashCommandBuilder()
@@ -15,8 +15,8 @@ export default {
 
     const target = interaction.options.getUser("user", true);
     const text = interaction.options.getString("text", true);
-    const config = await GuildConfigModel.findOne({ guildId: interaction.guildId }).lean();
-    const channelId = config?.modLogChannelId;
+    const guildConfigService = interaction.client.container.get(TOKENS.GuildConfigService);
+    const channelId = await guildConfigService.getModLogChannelId(interaction.guildId);
 
     if (channelId) {
       const channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
