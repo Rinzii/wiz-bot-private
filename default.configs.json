@@ -1,0 +1,10 @@
+{
+  "discord": {
+    "token": "YOUR_BOT_TOKEN",
+    "clientId": "YOUR_APP_CLIENT_ID",
+    "devGuildIds": ["123456789012345678"]
+  },
+  "mongo": { "uri": "mongodb://localhost:27017/discord_modbot" },
+  "privateModuleDirs": ["modules/bot-private"],
+  "modLogChannelId": "123456789012345678"
+}
