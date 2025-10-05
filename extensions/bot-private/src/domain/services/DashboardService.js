@@ -2153,12 +2153,42 @@ export class DashboardService {
     res.status(500).json({ error: "Internal server error" });
   }
 
+  #escapeHtml(value) {
+    if (typeof value !== "string" || value.length === 0) return "";
+    return value.replace(/[&<>"'`]/g, (char) => {
+      switch (char) {
+        case "&":
+          return "&amp;";
+        case "<":
+          return "&lt;";
+        case ">":
+          return "&gt;";
+        case '"':
+          return "&quot;";
+        case "'":
+          return "&#39;";
+        case "`":
+          return "&#96;";
+        default:
+          return char;
+      }
+    });
+  }
+
   #renderPage({ basePath, authenticated, username }) {
     const base = this.#normalizeBasePath(basePath);
     const apiBase = base === "/" ? "/api" : `${base}/api`;
     const authBase = base === "/" ? "/auth" : `${base}/auth`;
-    const authenticatedJson = JSON.stringify(Boolean(authenticated));
+    const isAuthenticated = Boolean(authenticated);
+    const authenticatedJson = JSON.stringify(isAuthenticated);
     const usernameJson = JSON.stringify(username || "");
+    const escapedUsername = this.#escapeHtml(username || "");
+    const loginHiddenAttr = isAuthenticated ? " hidden" : "";
+    const dashboardHiddenAttr = isAuthenticated ? "" : " hidden";
+    const sessionMetaText = isAuthenticated
+      ? (escapedUsername ? `Signed in as ${escapedUsername}.` : "Signed in.")
+      : "Please sign in to access moderation data.";
+    const loginAutofocusAttr = isAuthenticated ? "" : " autofocus";
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2273,14 +2303,14 @@ export class DashboardService {
     <header class="page-header">
       <div>
         <h1>Private Moderation Dashboard</h1>
-        <p class="meta" id="session-meta">Please sign in to access moderation data.</p>
+        <p class="meta" id="session-meta">${sessionMetaText}</p>
       </div>
     </header>
-    <section id="login-section" class="card">
+    <section id="login-section" class="card"${loginHiddenAttr}>
       <h2>Sign in</h2>
       <form id="login-form" method="post" action="${authBase}/login" autocomplete="off">
         <label>Username
-          <input id="login-username" name="username" autocomplete="username" required />
+          <input id="login-username" name="username" autocomplete="username" required${loginAutofocusAttr} />
         </label>
         <label>Password
           <input id="login-password" name="password" type="password" autocomplete="current-password" required />
@@ -2292,7 +2322,7 @@ export class DashboardService {
       </form>
       <div class="error" id="login-error" hidden></div>
     </section>
-    <section id="dashboard-section" class="card" hidden>
+    <section id="dashboard-section" class="card"${dashboardHiddenAttr}>
       <div class="dashboard-controls">
         <div class="filters">
           <label>Guild ID
