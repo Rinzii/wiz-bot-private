@@ -2197,12 +2197,12 @@ export class DashboardService {
     </header>
     <section id="login-section" class="card">
       <h2>Sign in</h2>
-      <form id="login-form" autocomplete="off">
+      <form id="login-form" method="post" action="${authBase}/login" autocomplete="off">
         <label>Username
-          <input id="login-username" name="username" autocomplete="off" required />
+          <input id="login-username" name="username" autocomplete="username" required />
         </label>
         <label>Password
-          <input id="login-password" name="password" type="password" autocomplete="off" required />
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required />
         </label>
         <div class="actions">
           <button type="submit">Sign in</button>
