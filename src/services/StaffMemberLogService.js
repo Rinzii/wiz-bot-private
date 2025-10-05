@@ -1,4 +1,5 @@
 import { Collection } from "discord.js";
+import { findDefaultStaffChannel } from "../utils/staffChannels.js";
 
 const CHANNEL_MAP_KEYS = [
   "staff_member_log",
@@ -92,6 +93,12 @@ export class StaffMemberLogService {
           }
         }
       }
+    }
+
+    const defaultChannel = findDefaultStaffChannel(guild, CHANNEL_MAP_KEYS, isTextSendable);
+    if (defaultChannel) {
+      this.#cache.set(guild.id, { channel: defaultChannel, resolvedAt: Date.now() });
+      return defaultChannel;
     }
 
     const fallbackId = await this.#resolveFallbackId(guild).catch(() => this.fallbackChannelId);
