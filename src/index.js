@@ -13,6 +13,7 @@ import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
 import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
+import { VirusTotalService } from "./services/VirusTotalService.js";
 
 async function main() {
   await connectMongo();
@@ -39,6 +40,7 @@ async function main() {
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
+  container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
