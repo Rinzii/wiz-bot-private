@@ -1,7 +1,19 @@
-import asyncLib from "async";
 import { readdirSync } from "node:fs";
 import { join, resolve, extname } from "node:path";
 import { validateMeta, logMetaWarning } from "./commandMeta.js";
+
+async function eachLimit(iterable, limit, iterator) {
+  const max = Number.isInteger(limit) && limit > 0 ? limit : 1;
+  const executing = new Set();
+  for (const item of iterable) {
+    const p = (async () => iterator(item))();
+    executing.add(p);
+    const remove = () => executing.delete(p);
+    p.then(remove, remove);
+    if (executing.size >= max) await Promise.race(executing);
+  }
+  await Promise.all(executing);
+}
 
 /** Recursively list files by extension. */
 export async function walkFiles(root, exts = [".js"]) {
@@ -23,7 +35,7 @@ export async function loadDirCommands(root, registryMap) {
       const parsed = Number.parseInt(process.env.COMMAND_IMPORT_CONCURRENCY ?? "", 10);
       return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
     })();
-    await asyncLib.eachLimit(files, concurrency, async (file) => {
+    await eachLimit(files, concurrency, async (file) => {
       const mod = await import(`file://${resolve(file)}`).catch(() => null);
       const def = mod?.default;
       if (!def?.data) return;
@@ -51,7 +63,7 @@ export async function loadDirEvents(root, client) {
     const parsed = Number.parseInt(process.env.EVENT_IMPORT_CONCURRENCY ?? "", 10);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
   })();
-  await asyncLib.eachLimit(files, concurrency, async (file) => {
+  await eachLimit(files, concurrency, async (file) => {
     const mod = await import(`file://${resolve(file)}`).catch(() => null);
     const def = mod?.default;
     if (!def?.name || typeof def.execute !== "function") return;
