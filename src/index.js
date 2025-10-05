@@ -12,6 +12,7 @@ import { loadDirCommands, loadDirEvents, loadPlugins } from "./core/loader.js";
 import { Logger } from "./utils/logger.js";
 import mongoose from "mongoose";
 import { ModerationLogService } from "./services/ModerationLogService.js";
+import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
 
 async function main() {
   await connectMongo();
@@ -37,6 +38,7 @@ async function main() {
   container.set(TOKENS.ChannelMapService, new ChannelMapService());
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
+  container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));

@@ -92,6 +92,16 @@ export class ModerationLogService {
     ).lean();
   }
 
+  async updateReason({ guildId, caseNumber, reason }) {
+    const numericCase = typeof caseNumber === "number" ? caseNumber : Number(caseNumber);
+    if (!guildId || Number.isNaN(numericCase)) return null;
+    return ModerationActionModel.findOneAndUpdate(
+      { guildId, caseNumber: numericCase },
+      { reason: reason?.trim?.() || "No reason provided." },
+      { new: true }
+    ).lean();
+  }
+
   async #nextCaseNumber(guildId) {
     if (!guildId) throw new Error("guildId required for case number allocation");
     const counter = await ModerationCounterModel.findOneAndUpdate(
