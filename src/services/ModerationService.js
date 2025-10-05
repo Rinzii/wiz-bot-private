@@ -78,6 +78,52 @@ export class ModerationService {
     return entry;
   }
 
+  async softban({ guild, target, moderator, reason, deleteMessageSeconds = 86400, metadata }) {
+    if (!target?.bannable) throw new Error("Target not bannable (role/perms).");
+    if (!guild) throw new Error("Missing guild instance for softban.");
+
+    const normalizedReason = normalizeReason(reason);
+    const deleteSeconds = Number.isFinite(deleteMessageSeconds)
+      ? Math.min(Math.max(Math.floor(deleteMessageSeconds), 0), 7 * 24 * 60 * 60)
+      : 0;
+
+    const auditReason = this.#buildAuditReason(moderator, normalizedReason, null);
+    const banOptions = { reason: auditReason };
+    if (deleteSeconds > 0) banOptions.deleteMessageSeconds = deleteSeconds;
+
+    await target.ban(banOptions);
+
+    let entry = null;
+    if (this.#logService) {
+      entry = await this.#logService.record({
+        guildId: guild.id,
+        userId: target.id,
+        moderatorId: moderator?.id,
+        action: ModerationActionType.Softban,
+        reason: normalizedReason,
+        durationMs: null,
+        expiresAt: null,
+        metadata: {
+          deleteMessageSeconds: deleteSeconds,
+          ...(metadata || {}),
+          targetTag: target?.user?.tag || null
+        }
+      });
+    }
+
+    try {
+      await guild.bans.remove(target.id, this.#buildAuditReason(moderator, "Softban release", null));
+    } catch (err) {
+      if (err?.code === 10026 || /unknown ban/i.test(err?.message || "")) {
+        // Already removed
+      } else {
+        throw err;
+      }
+    }
+
+    return entry;
+  }
+
   registerTimedActionHandler(action, handler) {
     if (!action) throw new Error("action is required for timed handler registration");
     if (!handler || typeof handler.onExpire !== "function") {
