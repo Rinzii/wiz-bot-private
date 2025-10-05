@@ -6,6 +6,21 @@ import { findInviteMatches } from "../../../shared/utils/invites.js";
 const STAFF_KEYS = ["admin", "mod", "special"];
 const MOD_PERM = PermissionsBitField.Flags.ModerateMembers;
 
+async function isSelfInvite(client, code, guildId, cache) {
+  if (!client?.fetchInvite || !code || !guildId) return false;
+  const key = code.toLowerCase();
+  if (cache.has(key)) return cache.get(key);
+  try {
+    const invite = await client.fetchInvite(code);
+    const result = invite?.guild?.id === guildId;
+    cache.set(key, result);
+    return result;
+  } catch {
+    cache.set(key, false);
+    return false;
+  }
+}
+
 async function resolveMember(message) {
   if (message.member) return message.member;
   if (!message.guild) return null;
@@ -109,7 +124,14 @@ export async function enforceInvitePolicy(message, source = "unknown") {
   if (hasStaffRole) return;
 
   const allowedInviteService = container.get(TOKENS.AllowedInviteService);
-  const violating = matches.find((match) => !allowedInviteService.isAllowed(match.code));
+  const inviteCache = new Map();
+  let violating = null;
+  for (const match of matches) {
+    if (allowedInviteService.isAllowed(match.code)) continue;
+    if (await isSelfInvite(message.client, match.code, message.guildId, inviteCache)) continue;
+    violating = match;
+    break;
+  }
   if (!violating) return;
 
   const snapshot = {
