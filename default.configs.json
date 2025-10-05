@@ -12,6 +12,14 @@
     "thresholdMs": 1800000,
     "alertChannelId": "123456789012345678"
   },
+  "roles": {
+    "skillRoles": [
+      { "name": "Apprentice", "roleId": "111111111111111111" },
+      { "name": "Proficient", "roleId": "222222222222222222" },
+      { "name": "Expert", "roleId": "333333333333333333" }
+    ],
+    "skillRoleThreshold": "Proficient"
+  },
   "antiSpam": {
     "msgWindowMs": 15000,
     "msgMaxInWindow": 10,
