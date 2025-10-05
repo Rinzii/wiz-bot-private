@@ -106,6 +106,24 @@ const virusTotalDefaults = {
   maxFileBytes: 32 * 1024 * 1024
 };
 const virusTotalFileCfg = fileScannerFileCfg?.virusTotal || fileCfg?.virusTotal || {};
+const mentionTrackerDefaults = {
+  enabled: false,
+  staffFlagChannelKey: fileScannerDefaults.staffFlagChannelKey,
+  trackedRoleIds: [],
+  trackedUserIds: [],
+  additionalFlagChannelKeys: []
+};
+const mentionTrackerFileCfg = fileCfg?.mentionTracker || {};
+
+const mentionTrackerRoleRaw = process.env.MENTION_TRACKER_ROLE_IDS !== undefined
+  ? process.env.MENTION_TRACKER_ROLE_IDS
+  : mentionTrackerFileCfg.trackedRoleIds ?? mentionTrackerDefaults.trackedRoleIds;
+const mentionTrackerUserRaw = process.env.MENTION_TRACKER_USER_IDS !== undefined
+  ? process.env.MENTION_TRACKER_USER_IDS
+  : mentionTrackerFileCfg.trackedUserIds ?? mentionTrackerDefaults.trackedUserIds;
+const mentionTrackerExtraKeysRaw = process.env.MENTION_TRACKER_EXTRA_FLAG_KEYS !== undefined
+  ? process.env.MENTION_TRACKER_EXTRA_FLAG_KEYS
+  : mentionTrackerFileCfg.additionalFlagChannelKeys ?? mentionTrackerDefaults.additionalFlagChannelKeys;
 
 export const CONFIG = {
   token: envOr("DISCORD_TOKEN", fileCfg?.discord?.token || ""),
@@ -152,6 +170,13 @@ export const CONFIG = {
       maxPolls: toNumber(envOr("VIRUSTOTAL_MAX_POLLS", virusTotalFileCfg.maxPolls ?? virusTotalDefaults.maxPolls), virusTotalDefaults.maxPolls),
       maxFileBytes: toNumber(envOr("VIRUSTOTAL_MAX_FILE_BYTES", virusTotalFileCfg.maxFileBytes ?? virusTotalDefaults.maxFileBytes), virusTotalDefaults.maxFileBytes)
     }
+  },
+  mentionTracker: {
+    enabled: toBoolean(envOr("MENTION_TRACKER_ENABLED", mentionTrackerFileCfg.enabled ?? mentionTrackerDefaults.enabled), mentionTrackerDefaults.enabled),
+    staffFlagChannelKey: envOr("MENTION_TRACKER_FLAG_CHANNEL_KEY", mentionTrackerFileCfg.staffFlagChannelKey ?? mentionTrackerDefaults.staffFlagChannelKey) || "",
+    trackedRoleIds: toList(mentionTrackerRoleRaw),
+    trackedUserIds: toList(mentionTrackerUserRaw),
+    additionalFlagChannelKeys: toList(mentionTrackerExtraKeysRaw)
   }
 };
 

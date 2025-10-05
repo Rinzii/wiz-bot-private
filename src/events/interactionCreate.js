@@ -6,13 +6,29 @@ export default {
   name: "interactionCreate",
   once: false,
   async execute(interaction) {
+    const container = interaction.client?.container;
+
+    if (interaction.isButton()) {
+      try {
+        const mentionTracker = container?.get(TOKENS.MentionTrackerService);
+        if (mentionTracker) {
+          const handled = await mentionTracker.handleInteraction(interaction);
+          if (handled) return;
+        }
+      } catch {
+        // ignore missing mention tracker service
+      }
+    }
+
     if (!interaction.isChatInputCommand()) return;
+
+    if (!container) return;
 
     const commands = interaction.client.commands;
     const cmd = commands.get(interaction.commandName);
     if (!cmd) return;
 
-    const logger = interaction.client.container.get(TOKENS.Logger);
+    const logger = container.get(TOKENS.Logger);
     const started = Date.now();
     const meta = {
       user: `${interaction.user.tag} (${interaction.user.id})`,

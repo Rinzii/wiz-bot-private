@@ -16,6 +16,7 @@ import { RuntimeModerationState } from "./services/RuntimeModerationState.js";
 import { StaffMemberLogService } from "./services/StaffMemberLogService.js";
 import { AllowedInviteService } from "./services/AllowedInviteService.js";
 import { VirusTotalService } from "./services/VirusTotalService.js";
+import { MentionTrackerService } from "./services/MentionTrackerService.js";
 
 async function main() {
   await connectMongo();
@@ -40,6 +41,8 @@ async function main() {
 
   const channelMapService = new ChannelMapService();
   container.set(TOKENS.ChannelMapService, channelMapService);
+  const staffRoleService = new StaffRoleService();
+  container.set(TOKENS.StaffRoleService, staffRoleService);
   container.set(TOKENS.StaffRoleService, new StaffRoleService());
   container.set(TOKENS.AntiSpamService, new AntiSpamService(CONFIG.antiSpam));
   container.set(TOKENS.RuntimeModerationState, new RuntimeModerationState());
@@ -58,6 +61,14 @@ async function main() {
     logger?.error?.("invite_guard.allowlist_preload_failed", { error: String(err?.message || err) });
   }
   container.set(TOKENS.VirusTotalService, new VirusTotalService(CONFIG.fileScanner?.virusTotal || {}, logger));
+  const mentionTrackerService = new MentionTrackerService({
+    logger,
+    channelMapService,
+    staffRoleService,
+    config: CONFIG.mentionTracker || {},
+    fallbackChannelId: CONFIG.modLogChannelId
+  });
+  container.set(TOKENS.MentionTrackerService, mentionTrackerService);
 
   // Plugins
   const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
