@@ -31,5 +31,11 @@
     "msgMaxInWindow": 10,
     "linkWindowMs": 45000,
     "linkMaxInWindow": 6
+  },
+  "channels": {
+    "staff_action_log": "123456789012345678"
+  },
+  "colors": {
+    "alert_color": "#F05A66"
   }
 }

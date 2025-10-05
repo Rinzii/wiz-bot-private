@@ -99,6 +99,10 @@ export default {
           thresholdMs: brandNewCfg.thresholdMs,
           enabled: brandNewCfg.enabled,
           formatDuration,
+          colorResolver: (key) => {
+            if (key === "alert") return CONFIG.colors?.alert ?? null;
+            return null;
+          },
         });
 
         tracker.addSubmodule(brandNewWatcher);
