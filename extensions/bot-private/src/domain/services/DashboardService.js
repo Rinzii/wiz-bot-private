@@ -363,6 +363,17 @@ export class DashboardService {
     return normalized || "/";
   }
 
+  #requestPrefersHtml(req) {
+    const accept = req?.headers?.accept;
+    if (typeof accept !== "string" || accept.length === 0) return false;
+
+    return accept
+      .split(",")
+      .map((value) => value.split(";")[0]?.trim().toLowerCase())
+      .filter(Boolean)
+      .some((type) => type === "text/html" || type === "application/xhtml+xml");
+  }
+
   #createRateLimiter(options, metricKey) {
     if (!options || typeof options !== "object") return null;
     const windowMs = Number.isFinite(options.windowMs) ? Math.max(1, options.windowMs) : null;
@@ -491,6 +502,13 @@ export class DashboardService {
               ...attemptContext,
               username: this.#config.username
             });
+
+            if (this.#requestPrefersHtml(req)) {
+              const basePath = this.#normalizeBasePath(this.#config.basePath);
+              res.redirect(303, basePath || "/");
+              return;
+            }
+
             res.json({ ok: true, username: this.#config.username });
           })
           .catch((saveError) => {

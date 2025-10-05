@@ -114,3 +114,25 @@ test("dashboard exposes a clickable url", async (t) => {
 
   assert.equal(service.getUrl(), `http://localhost:${port}${basePath}`);
 });
+
+test("dashboard login redirects html form submissions to the dashboard", async (t) => {
+  const hash = await bcrypt.hash("s3cret", 4);
+  const basePath = "/panel";
+  const { service, port } = await createService({ passwordHash: hash, basePath });
+  t.after(async () => {
+    await service.stop();
+  });
+
+  const res = await fetch(`http://127.0.0.1:${port}${basePath}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Accept": "text/html,application/xhtml+xml"
+    },
+    body: new URLSearchParams({ username: "admin", password: "s3cret" }),
+    redirect: "manual"
+  });
+
+  assert.equal(res.status, 303);
+  assert.equal(res.headers.get("location"), basePath);
+});
