@@ -1,5 +1,6 @@
 import { replyEph, followUpEph } from "../utils/respond.js";
 import { hasDefaultPerms, hasAppLevelPerms } from "../utils/permissions.js";
+import { TOKENS } from "../container.js";
 
 export default {
   name: "interactionCreate",
@@ -11,7 +12,7 @@ export default {
     const cmd = commands.get(interaction.commandName);
     if (!cmd) return;
 
-    const logger = interaction.client.container.get("Logger");
+    const logger = interaction.client.container.get(TOKENS.Logger);
     const started = Date.now();
     const meta = {
       user: `${interaction.user.tag} (${interaction.user.id})`,

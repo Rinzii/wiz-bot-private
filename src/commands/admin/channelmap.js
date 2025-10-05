@@ -1,4 +1,5 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { infoEmbed, listEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -26,7 +27,7 @@ export default {
     if (!interaction.inGuild()) {
       return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Channel Map", "Guild only.")] });
     }
-    const svc = interaction.client.container.get("ChannelMapService");
+    const svc = interaction.client.container.get(TOKENS.ChannelMapService);
     const sub = interaction.options.getSubcommand();
 
     if (sub === "set") {

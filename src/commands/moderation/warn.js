@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, SlashCommandBuilder, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { infoEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -11,7 +12,7 @@ export default {
     if (!interaction.inGuild()) return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Warn", "Guild only.")] });
     const target = interaction.options.getUser("user", true);
     const reason = interaction.options.getString("reason") || "No reason provided.";
-    const svc = interaction.client.container.get("WarningService");
+    const svc = interaction.client.container.get(TOKENS.WarningService);
     await svc.add(interaction.guildId, target.id, interaction.user.id, reason);
     return interaction.reply({ embeds: [infoEmbed("Warn", `Warned **${target.tag}**\n**Reason:** ${reason}`)] });
   },

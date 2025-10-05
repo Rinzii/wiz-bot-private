@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, SlashCommandBuilder, ChannelType, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { infoEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -12,7 +13,7 @@ export default {
       return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [infoEmbed("Purge", "Use in a text channel.")] });
     }
     const amount = interaction.options.getInteger("amount", true);
-    const svc = interaction.client.container.get("ModerationService");
+    const svc = interaction.client.container.get(TOKENS.ModerationService);
     try {
       const deleted = await svc.bulkDelete(interaction.channel, amount);
       return interaction.reply({ embeds: [infoEmbed("Purge", `Deleted **${deleted}** message(s).`)] });

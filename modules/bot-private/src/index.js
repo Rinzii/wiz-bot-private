@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { PRIVATE_TOKENS } from "./services/token.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { PRIVATE_TOKENS } from "./services/tokens.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -27,10 +27,11 @@ export default {
       async register(container) {
         const { AntiRaidService } = await import("./services/AntiRaidService.js");
 
-        // 👉 go up THREE levels from modules/bot-private/src to project root /src
-        const { CONFIG } = await import("../../../src/config.js");
-        const { TOKENS } = await import("../../../src/container.js");
-        const { ChannelMapService } = await import("../../../src/services/ChannelMapService.js");
+        // Resolve the host project's src/ directory relative to this plugin.
+        const rootSrc = resolve(__dirname, "../../..", "src");
+        const fromSrc = (rel) => pathToFileURL(resolve(rootSrc, rel)).href;
+        const { CONFIG } = await import(fromSrc("config.js"));
+        const { TOKENS } = await import(fromSrc("container.js"));
 
         const getModLog = async (g) => {
           try {

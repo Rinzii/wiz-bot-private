@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, MessageFlags } from "discord.js";
+import { TOKENS } from "../../container.js";
 import { listEmbed } from "../../utils/embeds.js";
 
 export default {
@@ -10,7 +11,7 @@ export default {
       return interaction.reply({ flags: MessageFlags.Ephemeral, embeds: [listEmbed("Warnings", ["Guild only."])] });
     }
     const user = interaction.options.getUser("user", true);
-    const svc = interaction.client.container.get("WarningService");
+    const svc = interaction.client.container.get(TOKENS.WarningService);
     const list = await svc.list(interaction.guildId, user.id, 10);
     const lines = list.length
       ? list.map(w => `• ${w.reason} — <t:${Math.floor(new Date(w.createdAt).getTime()/1000)}:R> by <@${w.modId}>`)
