@@ -42,7 +42,21 @@ const ENV_OVERRIDES = [
   { env: "MENTION_TRACKER_EXTRA_FLAG_KEYS", path: "mentionTracker.additionalFlagChannelKeys", parse: parseList },
   { env: "MENTION_TRACKER_ROLE_IDS", path: "mentionTracker.trackedRoleIds", parse: parseList },
   { env: "MENTION_TRACKER_USER_IDS", path: "mentionTracker.trackedUserIds", parse: parseList },
-  { env: "DISPLAY_NAME_SWEEP_INTERVAL_MINUTES", path: "displayNamePolicy.sweepIntervalMinutes", parse: parseNumber }
+  { env: "DISPLAY_NAME_SWEEP_INTERVAL_MINUTES", path: "displayNamePolicy.sweepIntervalMinutes", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_ENABLED", path: "privateDashboard.enabled", parse: parseBoolean },
+  { env: "PRIVATE_DASHBOARD_PORT", path: "privateDashboard.port", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_BASE_PATH", path: "privateDashboard.basePath", parse: parseString },
+  { env: "PRIVATE_DASHBOARD_GUILD_ALLOW_LIST", path: "privateDashboard.guildAllowList", parse: parseList },
+  { env: "PRIVATE_DASHBOARD_USERNAME", path: "privateDashboard.username", parse: parseString },
+  { env: "PRIVATE_DASHBOARD_PASSWORD_HASH", path: "privateDashboard.passwordHash", parse: parseString },
+  { env: "PRIVATE_DASHBOARD_SESSION_SECRET", path: "privateDashboard.sessionSecret", parse: parseString },
+  { env: "PRIVATE_DASHBOARD_SECURE_COOKIES", path: "privateDashboard.secureCookies", parse: parseBoolean },
+  { env: "PRIVATE_DASHBOARD_TRUST_PROXY", path: "privateDashboard.trustProxy", parse: parseBoolean },
+  { env: "PRIVATE_DASHBOARD_RATE_LIMIT_WINDOW_MS", path: "privateDashboard.rateLimit.windowMs", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_RATE_LIMIT_MAX", path: "privateDashboard.rateLimit.max", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_LOGIN_RATE_LIMIT_WINDOW_MS", path: "privateDashboard.loginRateLimit.windowMs", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_LOGIN_RATE_LIMIT_MAX", path: "privateDashboard.loginRateLimit.max", parse: parseNumber },
+  { env: "PRIVATE_DASHBOARD_SESSION_MAX_AGE_MS", path: "privateDashboard.sessionMaxAgeMs", parse: parseNumber }
 ];
 
 const layered = [DEFAULT_CONFIG, ...loadConfigLayers()].map(clonePlainObject);
@@ -97,7 +111,8 @@ function normalizeLayer(input) {
     "colors",
     "fileScanner",
     "mentionTracker",
-    "displayNamePolicy"
+    "displayNamePolicy",
+    "privateDashboard"
   ];
 
   for (const key of directKeys) {

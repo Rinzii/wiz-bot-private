@@ -5,6 +5,9 @@ export class Container {
     if (!this.#map.has(key)) throw new Error(`Container missing: ${key}`);
     return this.#map.get(key);
   }
+  has(key) {
+    return this.#map.has(key);
+  }
 }
 
 export const TOKENS = {
@@ -22,5 +25,6 @@ export const TOKENS = {
   MentionTrackerService: "MentionTrackerService",
   AllowedInviteService: "AllowedInviteService",
   DisplayNamePolicyService: "DisplayNamePolicyService",
-  GuildConfigService: "GuildConfigService"
+  GuildConfigService: "GuildConfigService",
+  DashboardService: "DashboardService"
 };

@@ -22,6 +22,26 @@ export const DEFAULT_CONFIG = Object.freeze({
     thresholdMs: 30 * 60_000,
     alertChannelId: ""
   },
+  privateDashboard: {
+    enabled: true,
+    port: 3080,
+    basePath: "/",
+    guildAllowList: [],
+    username: "",
+    passwordHash: "",
+    sessionSecret: "",
+    secureCookies: true,
+    trustProxy: false,
+    rateLimit: {
+      windowMs: 60_000,
+      max: 100
+    },
+    loginRateLimit: {
+      windowMs: 15 * 60_000,
+      max: 10
+    },
+    sessionMaxAgeMs: 60 * 60_000
+  },
   colors: {
     green: 0x57F287,
     red: 0xED4245,
