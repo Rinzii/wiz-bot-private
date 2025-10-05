@@ -6,6 +6,10 @@ import { Container, TOKENS } from "./container/index.js";
 import { loadDirCommands, loadDirEvents, loadPlugins } from "./registry/loader.js";
 import mongoose from "mongoose";
 import { registerCoreServices } from "./container/registerCoreServices.js";
+import { Logger } from "../shared/utils/logger.js";
+import { WarningModel } from "../infrastructure/database/models/Warning.js";
+import { ModerationActionModel } from "../infrastructure/database/models/ModerationAction.js";
+import { formatDuration } from "../shared/utils/time.js";
 
 async function main() {
   await connectMongo();
