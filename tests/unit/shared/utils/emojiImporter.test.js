@@ -12,7 +12,18 @@ import {
   createEmojiFromCdn,
   createEmojiFromUrl
 } from "../../../../src/shared/utils/emojiImporter.js";
+import dns from "node:dns/promises";
 import { PermissionFlagsBits } from "discord.js";
+
+function mockDnsLookup(t) {
+  const originalLookup = dns.lookup;
+  dns.lookup = async () => [
+    { address: "203.0.113.1", family: 4 }
+  ];
+  t.after(() => {
+    dns.lookup = originalLookup;
+  });
+}
 
 test("extractCustomEmojis parses animated flag and identifiers", () => {
   const results = extractCustomEmojis("hello <a:test:123456789012345678> and <:static:876543210987654321>");
@@ -59,6 +70,7 @@ test("ensureBotEmojiPermissions throws when Manage Guild Expressions missing", a
 test("fetchEmojiAttachment validates responses", async (t) => {
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; });
+  mockDnsLookup(t);
 
   const data = Buffer.from([1, 2, 3]);
   global.fetch = async () => ({
@@ -94,6 +106,7 @@ test("createEmojiFromCdn downloads emoji and creates guild emoji", async (t) => 
 
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; });
+  mockDnsLookup(t);
   global.fetch = async () => ({
     ok: true,
     status: 200,
@@ -120,6 +133,7 @@ test("createEmojiFromUrl uses provided name and extension", async (t) => {
 
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; });
+  mockDnsLookup(t);
   global.fetch = async () => ({
     ok: true,
     status: 200,
@@ -127,7 +141,7 @@ test("createEmojiFromUrl uses provided name and extension", async (t) => {
     async arrayBuffer() { return new Uint8Array([2]).buffer; }
   });
 
-  const name = await createEmojiFromUrl(guild, "custom", "https://url", used, "reason");
+  const name = await createEmojiFromUrl(guild, "custom", "https://example.com/image.png", used, "reason");
   assert.equal(name, "custom");
   assert.equal(guild.emojis.create.mock.calls.length, 1);
   const call = guild.emojis.create.mock.calls[0].arguments[0];
