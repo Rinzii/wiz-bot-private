@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { CONFIG } from "../config/index.js";
 import { connectMongo } from "../infrastructure/database/mongoose.js";
 import { Container, TOKENS } from "./container/index.js";
-import { loadDirCommands, loadDirEvents, loadPlugins } from "./registry/loader.js";
+import { PluginManager } from "./registry/PluginManager.js";
 import mongoose from "mongoose";
 import { registerCoreServices } from "./container/registerCoreServices.js";
 import { Logger } from "../shared/utils/logger.js";
@@ -37,20 +37,20 @@ async function main() {
     }
   };
 
-  const pluginDirs = (CONFIG.privateModuleDirs || []).map(p => resolve(process.cwd(), p));
-  const regs = await loadPlugins(pluginDirs);
-  for (const r of regs) {
-    if (typeof r.register === "function") {
-      await r.register(container, pluginContext);
-    }
-  }
+  const pluginDirs = (CONFIG.privateModuleDirs || []).map((p) => resolve(process.cwd(), p));
+  const pluginManager = new PluginManager({ pluginDirs });
+  await pluginManager.load();
+  await pluginManager.registerAll(container, pluginContext);
 
-  const intents = new Set([GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]);
-  const partials = new Set([Partials.Channel, Partials.GuildMember, Partials.Message]);
-  for (const r of regs) {
-    (r.intents || []).forEach(i => intents.add(i));
-    (r.partials || []).forEach(p => partials.add(p));
-  }
+  const intents = pluginManager.collectIntents([
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]);
+  const partials = pluginManager.collectPartials([
+    Partials.Channel,
+    Partials.GuildMember,
+    Partials.Message
+  ]);
 
   const client = new Client({ intents: [...intents], partials: [...partials] });
   client.container = container;
@@ -78,19 +78,15 @@ async function main() {
 
   moderationService.setClient(client);
 
-  await loadDirCommands(join(process.cwd(), "src", "features", "commands"), client.commands);
-  for (const r of regs) {
-    for (const d of (r.commandDirs || [])) {
-      await loadDirCommands(resolve(d), client.commands);
-    }
-  }
+  await pluginManager.loadCommands({
+    registry: client.commands,
+    coreDirs: [join(process.cwd(), "src", "features", "commands")]
+  });
 
-  await loadDirEvents(join(process.cwd(), "src", "features", "events"), client);
-  for (const r of regs) {
-    for (const d of (r.eventDirs || [])) {
-      await loadDirEvents(resolve(d), client);
-    }
-  }
+  await pluginManager.loadEvents({
+    client,
+    coreDirs: [join(process.cwd(), "src", "features", "events")]
+  });
 
   await client.login(CONFIG.token);
 
