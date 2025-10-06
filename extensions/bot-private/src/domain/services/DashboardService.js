@@ -3,10 +3,10 @@ import express from "express";
 import session from "express-session";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import bcrypt from "bcrypt";
 import { createServer } from "node:http";
 import { ChannelType } from "discord.js";
 import MongoStore from "connect-mongo";
+import { createPasswordVerifier, timingSafeCompare } from "./passwordVerifier.js";
 
 export class DashboardService {
   #logger;
@@ -18,14 +18,16 @@ export class DashboardService {
   #app;
   #sessionSecret;
   #warnedPlaintextPassword;
+  #passwordVerifier;
 
-  constructor({ config, logger, warningModel, moderationActionModel }) {
+  constructor({ config, logger, warningModel, moderationActionModel, passwordVerifier }) {
     this.#logger = logger;
     this.#config = this.#normalizeConfig(config);
     this.#warningModel = warningModel;
     this.#moderationActionModel = moderationActionModel;
     this.#sessionSecret = null;
     this.#warnedPlaintextPassword = false;
+    this.#passwordVerifier = passwordVerifier ?? createPasswordVerifier();
   }
 
   setClient(client) {
@@ -47,62 +49,84 @@ export class DashboardService {
 
     if (this.#server) return;
 
-    this.#app = express();
-    this.#app.disable("x-powered-by");
+    const basePath = this.#normalizeBasePath(this.#config.basePath);
+
+    this.#app = this.#createExpressApp();
+    const router = this.#createRouter({ basePath });
+    this.#app.use(basePath, router);
+
+    await this.#startHttpServer({ basePath });
+  }
+
+  #createExpressApp() {
+    const app = express();
+    app.disable("x-powered-by");
 
     const trustProxySetting = this.#config.trustProxy;
-    if (trustProxySetting) {
-      // if true, default to 1 proxy hop; else accept numeric/string as provided
-      this.#app.set("trust proxy", trustProxySetting === true ? 1 : trustProxySetting);
-    }
+    this.#applyTrustProxySetting(app, trustProxySetting);
 
-    // Per-request CSP nonce
-    this.#app.use((req, res, next) => {
+    app.use(this.#createNonceMiddleware());
+    app.use(this.#createHelmetMiddleware());
+    app.use(express.json({ limit: "256kb" }));
+    app.use(express.urlencoded({ extended: false, limit: "256kb" }));
+    app.use(this.#createSessionMiddleware({ trustProxySetting }));
+
+    return app;
+  }
+
+  #applyTrustProxySetting(app, trustProxySetting) {
+    if (!trustProxySetting) return;
+    // if true, default to 1 proxy hop; else accept numeric/string as provided
+    app.set("trust proxy", trustProxySetting === true ? 1 : trustProxySetting);
+  }
+
+  #createNonceMiddleware() {
+    return (_req, res, next) => {
       res.locals.cspNonce = crypto.randomBytes(16).toString("base64");
       next();
+    };
+  }
+
+  #createHelmetMiddleware() {
+    return helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: [
+            "'self'",
+            (_req, res) => `'nonce-${res.locals.cspNonce}'`
+          ],
+          styleSrc: [
+            "'self'",
+            (_req, res) => `'nonce-${res.locals.cspNonce}'`
+          ],
+          imgSrc: [
+            "'self'",
+            "data:",
+            "https://cdn.discordapp.com",
+            "https://media.discordapp.net"
+          ],
+          connectSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'none'"],
+          frameAncestors: ["'none'"]
+        }
+      },
+      referrerPolicy: { policy: "no-referrer" },
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: "same-origin" }
     });
+  }
 
-    // Helmet with strict CSP + nonces (no unsafe-inline)
-    this.#app.use(
-      helmet({
-        contentSecurityPolicy: {
-          directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: [
-              "'self'",
-              (req, res) => `'nonce-${res.locals.cspNonce}'`
-            ],
-            styleSrc: [
-              "'self'",
-              (req, res) => `'nonce-${res.locals.cspNonce}'`
-            ],
-            imgSrc: [
-              "'self'",
-              "data:",
-              "https://cdn.discordapp.com",
-              "https://media.discordapp.net"
-            ],
-            connectSrc: ["'self'"],
-            objectSrc: ["'none'"],
-            baseUri: ["'none'"],
-            frameAncestors: ["'none'"]
-          }
-        },
-        referrerPolicy: { policy: "no-referrer" },
-        crossOriginEmbedderPolicy: false,
-        crossOriginResourcePolicy: { policy: "same-origin" }
-      })
-    );
+  #createSessionMiddleware({ trustProxySetting }) {
+    const options = this.#buildSessionOptions({ trustProxySetting });
+    return session(options);
+  }
 
-    this.#app.use(express.json({ limit: "256kb" }));
-    this.#app.use(express.urlencoded({ extended: false, limit: "256kb" }));
-
-    const sessionSecret = this.#getSessionSecret();
-    const secureCookies =
-      this.#config.secureCookies === "auto" ? "auto" : Boolean(this.#config.secureCookies);
-    const maxAge = Number.isFinite(this.#config.sessionMaxAgeMs)
-      ? Math.max(60_000, this.#config.sessionMaxAgeMs)
-      : 60 * 60_000;
+  #buildSessionOptions({ trustProxySetting }) {
+    const secureCookies = this.#resolveSecureCookieSetting();
+    const maxAge = this.#resolveSessionMaxAge();
+    const secret = this.#getSessionSecret();
 
     if (secureCookies === false) {
       this.#logger?.warn?.("dashboard.cookies.insecure", {
@@ -118,46 +142,63 @@ export class DashboardService {
       });
     }
 
-    // Optional persistent session store (best practice)
-    let store = undefined;
-    if (this.#config.sessionStoreMongoUri) {
-      try {
-        store = MongoStore.create({
-          mongoUrl: this.#config.sessionStoreMongoUri,
-          ttl: Math.ceil(maxAge / 1000)
-        });
-        this.#logger?.info?.("dashboard.session_store.mongo.enabled");
-      } catch (err) {
-        this.#logger?.error?.("dashboard.session_store.mongo.error", {
-          error: String(err?.message || err)
-        });
+    const store = this.#createSessionStore({ maxAge });
+
+    return {
+      name: "dashboard.sid",
+      secret,
+      resave: false,
+      saveUninitialized: false,
+      proxy: Boolean(trustProxySetting),
+      rolling: true,
+      store,
+      cookie: {
+        httpOnly: true,
+        sameSite: "strict",
+        secure: secureCookies,
+        maxAge
       }
-    } else {
+    };
+  }
+
+  #resolveSecureCookieSetting() {
+    return this.#config.secureCookies === "auto"
+      ? "auto"
+      : Boolean(this.#config.secureCookies);
+  }
+
+  #resolveSessionMaxAge() {
+    if (Number.isFinite(this.#config.sessionMaxAgeMs)) {
+      return Math.max(60_000, this.#config.sessionMaxAgeMs);
+    }
+    return 60 * 60_000;
+  }
+
+  #createSessionStore({ maxAge }) {
+    if (!this.#config.sessionStoreMongoUri) {
       this.#logger?.warn?.("dashboard.session_store.memory", {
         message:
           "Using in-memory session store (not recommended for production). Set privateDashboard.sessionStoreMongoUri."
       });
+      return undefined;
     }
 
-    this.#app.use(
-      session({
-        name: "dashboard.sid",
-        secret: sessionSecret,
-        resave: false,
-        saveUninitialized: false,
-        proxy: Boolean(trustProxySetting),
-        rolling: true,
-        store,
-        cookie: {
-          httpOnly: true,
-          sameSite: "strict",
-          secure: secureCookies,
-          maxAge
-        }
-      })
-    );
+    try {
+      const store = MongoStore.create({
+        mongoUrl: this.#config.sessionStoreMongoUri,
+        ttl: Math.ceil(maxAge / 1000)
+      });
+      this.#logger?.info?.("dashboard.session_store.mongo.enabled");
+      return store;
+    } catch (err) {
+      this.#logger?.error?.("dashboard.session_store.mongo.error", {
+        error: String(err?.message || err)
+      });
+      return undefined;
+    }
+  }
 
-    const basePath = this.#normalizeBasePath(this.#config.basePath);
+  #createRouter({ basePath }) {
     const router = express.Router();
 
     const apiLimiter = this.#createRateLimiter(
@@ -178,11 +219,10 @@ export class DashboardService {
       res.json({ status: "ok", uptime: process.uptime() });
     });
 
-    router.post(
-      "/auth/login",
-      loginLimiter ?? ((req, _res, next) => next()),
-      (req, res, next) => this.#handleLogin(req, res).catch(next)
-    );
+    const loginHandlers = [];
+    if (loginLimiter) loginHandlers.push(loginLimiter);
+    loginHandlers.push((req, res, next) => this.#handleLogin(req, res).catch(next));
+    router.post("/auth/login", ...loginHandlers);
 
     router.post("/auth/logout", this.#authMiddleware(), async (req, res) => {
       try {
@@ -287,8 +327,10 @@ export class DashboardService {
         );
     });
 
-    this.#app.use(basePath, router);
+    return router;
+  }
 
+  async #startHttpServer({ basePath }) {
     await new Promise((resolve, reject) => {
       this.#server = createServer(this.#app);
       this.#server.once("error", (error) => {
@@ -590,7 +632,7 @@ export class DashboardService {
     }
 
     const passwordMatches = await this.#verifyPassword(providedPassword);
-    const usernameMatches = this.#safeCompare(providedUsername, this.#config.username);
+    const usernameMatches = timingSafeCompare(providedUsername, this.#config.username);
 
     if (!passwordMatches || !usernameMatches) {
       this.#logger?.warn?.("dashboard.login_failed", {
@@ -668,44 +710,30 @@ export class DashboardService {
     const secret = this.#config.passwordHash;
     if (typeof secret !== "string" || !secret) return false;
 
-    if (this.#looksLikeBcryptHash(secret)) {
-      try {
-        return await bcrypt.compare(providedPassword, secret);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.#logger?.error?.("dashboard.password_compare_error", { error: message });
-        return false;
-      }
-    }
+    const { ok, error } = await this.#passwordVerifier.verify({
+      provided: providedPassword,
+      secret,
+      onPlaintextFallback: () => this.#warnPlaintextSecret()
+    });
 
-    if (!this.#warnedPlaintextPassword) {
-      this.#warnedPlaintextPassword = true;
-      this.#logger?.warn?.("dashboard.password_hash.unhashed", {
-        message:
-          "privateDashboard.passwordHash does not appear to be a bcrypt hash; falling back to constant-time string comparison.",
-        remediation:
-          "Generate a bcrypt hash for the dashboard password and set PRIVATE_DASHBOARD_PASSWORD_HASH to the hashed value."
+    if (error) {
+      this.#logger?.error?.("dashboard.password_compare_error", {
+        error: error.message ?? String(error)
       });
     }
 
-    return this.#safeCompare(providedPassword, secret);
+    return ok;
   }
 
-  #safeCompare(a, b) {
-    if (typeof a !== "string" || typeof b !== "string") return false;
-    const bufferA = Buffer.from(a);
-    const bufferB = Buffer.from(b);
-    const len = Math.max(bufferA.length, bufferB.length, 1);
-    const paddedA = Buffer.alloc(len);
-    const paddedB = Buffer.alloc(len);
-    bufferA.copy(paddedA);
-    bufferB.copy(paddedB);
-    return crypto.timingSafeEqual(paddedA, paddedB) && bufferA.length === bufferB.length;
-  }
-
-  #looksLikeBcryptHash(value) {
-    if (typeof value !== "string") return false;
-    return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+  #warnPlaintextSecret() {
+    if (this.#warnedPlaintextPassword) return;
+    this.#warnedPlaintextPassword = true;
+    this.#logger?.warn?.("dashboard.password_hash.unhashed", {
+      message:
+        "privateDashboard.passwordHash does not appear to be a bcrypt hash; falling back to constant-time string comparison.",
+      remediation:
+        "Generate a bcrypt hash for the dashboard password and set PRIVATE_DASHBOARD_PASSWORD_HASH to the hashed value."
+    });
   }
 
   #commitSession(req) {
