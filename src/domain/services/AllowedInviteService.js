@@ -6,7 +6,7 @@ function normalizeCode(code) {
 }
 
 export class AllowedInviteService {
-  #cache = new Map(); // codeLower -> doc
+  #cache = new Map();
 
   constructor() {}
 

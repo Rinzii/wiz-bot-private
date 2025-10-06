@@ -9,7 +9,6 @@ function parseConcurrency(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** Recursively list files by extension. */
 export async function walkFiles(root, exts = [".js"]) {
   const out = [];
   const entries = readdirSync(root, { withFileTypes: true });
@@ -21,7 +20,6 @@ export async function walkFiles(root, exts = [".js"]) {
   return out;
 }
 
-/** Load command modules from a directory into a Map(name -> module). */
 export async function loadDirCommands(root, registryMap) {
   try {
     const files = await walkFiles(root, [".js"]);
@@ -31,7 +29,6 @@ export async function loadDirCommands(root, registryMap) {
       const def = mod?.default;
       if (!def?.data) return;
 
-      // Validate META (warn only). /help will ignore commands without meta.
       if (!def.meta) {
         console.warn(chalk.yellow(`[meta] ${file} — missing meta (command will be hidden from /help)`));
       } else {
@@ -47,7 +44,6 @@ export async function loadDirCommands(root, registryMap) {
   }
 }
 
-/** Load event modules from a directory and bind them to the client. */
 export async function loadDirEvents(root, client) {
   const files = await walkFiles(root, [".js"]);
   const concurrency = parseConcurrency(process.env.EVENT_IMPORT_CONCURRENCY, 4);
@@ -60,10 +56,6 @@ export async function loadDirEvents(root, client) {
   });
 }
 
-/**
- * Load plugins from directories.
- * Each plugin should export default { meta, setup() { return { commandDirs, eventDirs, intents, partials, register(container) } } }
- */
 export async function loadPlugins(pluginDirs = []) {
   const concurrency = parseConcurrency(process.env.PLUGIN_IMPORT_CONCURRENCY, 2);
   const loader = async (dir) => {

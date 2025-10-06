@@ -1,19 +1,5 @@
 import chalk from "chalk";
 
-// Schema + helpers for command metadata used by /help and permission gating
-
-/**
- * @typedef {Object} CommandMeta
- * @property {string} category   - e.g. "general","admin","moderation","security","debug"
- * @property {string} description
- * @property {string} usage
- * @property {string[]} [examples]
- * @property {string}  [permissions]  - human label for help (Discord perms text)
- * @property {string[]} [requireRoles] - explicit Discord role IDs (any of these)
- * @property {string[]} [requireKeys]  - StaffRole keys (e.g., ["admin","mod"]) (any of these)
- */
-
-/** Basic validation so you get helpful loader warnings. */
 export function validateMeta(meta, _filePath = "") {
   const errs = [];
   if (!meta || typeof meta !== "object") { errs.push("meta is missing"); return errs; }
@@ -26,12 +12,10 @@ export function validateMeta(meta, _filePath = "") {
   return errs;
 }
 
-/** Pretty loader warning. */
 export function logMetaWarning(file, errs) {
   const head = chalk.yellow(`[meta] ${file} — ${errs.length} issue(s):`);
   const bullets = errs.map(e => chalk.dim(`  • ${e}`)).join("\n");
   console.warn(`${head}\n${bullets}`);
 }
 
-/** Optional list if you want to standardize categories. */
 export const STANDARD_CATEGORIES = ["general", "admin", "moderation", "security", "debug"];

@@ -28,10 +28,6 @@ export class AntiSpamService {
     return g.get(uid);
   }
 
-  /**
-   * Record a message occurrence and link count.
-   * @returns {{shouldBan: boolean, reason?: string}}
-   */
   record(guildId, userId, linkCountNow = 0, nowTs = Date.now()) {
     const s = this._bucket(guildId, userId);
 

@@ -22,6 +22,7 @@ async function ensureCategory(guild, name, overwrites) {
   try { await cat.setPosition(0); } catch {}
   return cat;
 }
+
 async function ensureTextChannel(guild, name, parentId, overwrites) {
   const existing = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === name);
   if (existing) {

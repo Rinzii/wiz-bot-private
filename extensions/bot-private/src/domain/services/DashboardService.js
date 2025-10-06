@@ -3,9 +3,10 @@ import express from "express";
 import session from "express-session";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { createServer } from "node:http";
 import { ChannelType } from "discord.js";
+import MongoStore from "connect-mongo";
 
 export class DashboardService {
   #logger;
@@ -51,69 +52,122 @@ export class DashboardService {
 
     const trustProxySetting = this.#config.trustProxy;
     if (trustProxySetting) {
+      // if true, default to 1 proxy hop; else accept numeric/string as provided
       this.#app.set("trust proxy", trustProxySetting === true ? 1 : trustProxySetting);
     }
 
-    this.#app.use(helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          scriptSrc: ["'self'", "'unsafe-inline'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", "data:"],
-          connectSrc: ["'self'"],
-          objectSrc: ["'none'"],
-          baseUri: ["'none'"],
-          frameAncestors: ["'none'"]
-        }
-      },
-      referrerPolicy: { policy: "no-referrer" },
-      crossOriginEmbedderPolicy: false,
-      crossOriginResourcePolicy: { policy: "same-origin" }
-    }));
+    // Per-request CSP nonce
+    this.#app.use((req, res, next) => {
+      res.locals.cspNonce = crypto.randomBytes(16).toString("base64");
+      next();
+    });
+
+    // Helmet with strict CSP + nonces (no unsafe-inline)
+    this.#app.use(
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: [
+              "'self'",
+              (req, res) => `'nonce-${res.locals.cspNonce}'`
+            ],
+            styleSrc: [
+              "'self'",
+              (req, res) => `'nonce-${res.locals.cspNonce}'`
+            ],
+            imgSrc: [
+              "'self'",
+              "data:",
+              "https://cdn.discordapp.com",
+              "https://media.discordapp.net"
+            ],
+            connectSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'none'"],
+            frameAncestors: ["'none'"]
+          }
+        },
+        referrerPolicy: { policy: "no-referrer" },
+        crossOriginEmbedderPolicy: false,
+        crossOriginResourcePolicy: { policy: "same-origin" }
+      })
+    );
 
     this.#app.use(express.json({ limit: "256kb" }));
     this.#app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
     const sessionSecret = this.#getSessionSecret();
-    const secureCookies = this.#config.secureCookies === "auto"
-      ? "auto"
-      : Boolean(this.#config.secureCookies);
+    const secureCookies =
+      this.#config.secureCookies === "auto" ? "auto" : Boolean(this.#config.secureCookies);
     const maxAge = Number.isFinite(this.#config.sessionMaxAgeMs)
       ? Math.max(60_000, this.#config.sessionMaxAgeMs)
       : 60 * 60_000;
 
     if (secureCookies === false) {
       this.#logger?.warn?.("dashboard.cookies.insecure", {
-        message: "Session cookies are not marked secure; enable HTTPS and set privateDashboard.secureCookies=true in production."
+        message:
+          "Session cookies are not marked secure; enable HTTPS and set privateDashboard.secureCookies=true in production."
       });
     }
 
     if (!this.#config.sessionSecret) {
       this.#logger?.warn?.("dashboard.session_secret.fallback", {
-        message: "Falling back to an ephemeral session secret; configure privateDashboard.sessionSecret for persistent sessions."
+        message:
+          "Falling back to an ephemeral session secret; configure privateDashboard.sessionSecret for persistent sessions."
       });
     }
 
-    this.#app.use(session({
-      name: "dashboard.sid",
-      secret: sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      proxy: Boolean(trustProxySetting),
-      cookie: {
-        httpOnly: true,
-        sameSite: "strict",
-        secure: secureCookies,
-        maxAge
+    // Optional persistent session store (best practice)
+    let store = undefined;
+    if (this.#config.sessionStoreMongoUri) {
+      try {
+        store = MongoStore.create({
+          mongoUrl: this.#config.sessionStoreMongoUri,
+          ttl: Math.ceil(maxAge / 1000)
+        });
+        this.#logger?.info?.("dashboard.session_store.mongo.enabled");
+      } catch (err) {
+        this.#logger?.error?.("dashboard.session_store.mongo.error", {
+          error: String(err?.message || err)
+        });
       }
-    }));
+    } else {
+      this.#logger?.warn?.("dashboard.session_store.memory", {
+        message:
+          "Using in-memory session store (not recommended for production). Set privateDashboard.sessionStoreMongoUri."
+      });
+    }
+
+    this.#app.use(
+      session({
+        name: "dashboard.sid",
+        secret: sessionSecret,
+        resave: false,
+        saveUninitialized: false,
+        proxy: Boolean(trustProxySetting),
+        rolling: true,
+        store,
+        cookie: {
+          httpOnly: true,
+          sameSite: "strict",
+          secure: secureCookies,
+          maxAge
+        }
+      })
+    );
 
     const basePath = this.#normalizeBasePath(this.#config.basePath);
     const router = express.Router();
 
-    const apiLimiter = this.#createRateLimiter(this.#config.rateLimit, "dashboard.api.rate_limit");
-    const loginLimiter = this.#createRateLimiter(this.#config.loginRateLimit, "dashboard.login.rate_limit");
+    const apiLimiter = this.#createRateLimiter(
+      this.#config.rateLimit,
+      "dashboard.api.rate_limit"
+    );
+    const loginLimiter = this.#createRateLimiter(
+      this.#config.loginRateLimit,
+      "dashboard.login.rate_limit"
+    );
 
     if (apiLimiter) {
       router.use("/api", apiLimiter);
@@ -124,16 +178,21 @@ export class DashboardService {
       res.json({ status: "ok", uptime: process.uptime() });
     });
 
-    router.post("/auth/login", loginLimiter ?? ((req, _res, next) => next()), (req, res) => this.#handleLogin(req, res));
+    router.post(
+      "/auth/login",
+      loginLimiter ?? ((req, _res, next) => next()),
+      (req, res, next) => this.#handleLogin(req, res).catch(next)
+    );
+
     router.post("/auth/logout", this.#authMiddleware(), async (req, res) => {
       try {
         await new Promise((resolve, reject) => {
-          const session = req.session;
-          if (!session) {
+          const sess = req.session;
+          if (!sess) {
             resolve();
             return;
           }
-          session.destroy((error) => {
+          sess.destroy((error) => {
             if (error) reject(error);
             else resolve();
           });
@@ -216,11 +275,16 @@ export class DashboardService {
     });
 
     router.get("/", (req, res) => {
-      res.type("html").send(this.#renderPage({
-        basePath,
-        authenticated: this.#isAuthenticated(req),
-        username: this.#getSessionUsername(req)
-      }));
+      res
+        .type("html")
+        .send(
+          this.#renderPage({
+            basePath,
+            authenticated: this.#isAuthenticated(req),
+            username: this.#getSessionUsername(req),
+            cspNonce: res.locals.cspNonce
+          })
+        );
     });
 
     this.#app.use(basePath, router);
@@ -228,11 +292,16 @@ export class DashboardService {
     await new Promise((resolve, reject) => {
       this.#server = createServer(this.#app);
       this.#server.once("error", (error) => {
-        this.#logger?.error?.("dashboard.start_error", { error: String(error?.message || error) });
+        this.#logger?.error?.("dashboard.start_error", {
+          error: String(error?.message || error)
+        });
         reject(error);
       });
       this.#server.listen(this.#config.port, () => {
-        this.#logger?.info?.("dashboard.started", { port: this.#config.port, basePath });
+        this.#logger?.info?.("dashboard.started", {
+          port: this.#config.port,
+          basePath
+        });
         resolve();
       });
     });
@@ -240,12 +309,22 @@ export class DashboardService {
 
   async stop() {
     if (!this.#server) return;
-    await new Promise(resolve => this.#server.close(resolve));
+    await new Promise((resolve) => this.#server.close(resolve));
     this.#server = null;
   }
 
   getUrl() {
     const basePath = this.#normalizeBasePath(this.#config.basePath);
+
+    // allow explicit publicBaseUrl override
+    if (this.#config.publicBaseUrl) {
+      try {
+        return new URL(basePath, this.#config.publicBaseUrl).toString();
+      } catch {
+        // fall through
+      }
+    }
+
     const protocol = this.#config.secureCookies === true ? "https" : "http";
     const fallback = this.#buildDashboardUrl({
       hostname: "localhost",
@@ -270,12 +349,14 @@ export class DashboardService {
     const hostname = this.#formatHostname(address.address);
     const port = address.port ?? this.#config.port;
 
-    return this.#buildDashboardUrl({
-      hostname,
-      port,
-      basePath,
-      protocol
-    }) ?? fallback;
+    return (
+      this.#buildDashboardUrl({
+        hostname,
+        port,
+        basePath,
+        protocol
+      }) ?? fallback
+    );
   }
 
   #normalizeConfig(config) {
@@ -287,6 +368,8 @@ export class DashboardService {
       username: "",
       passwordHash: "",
       sessionSecret: "",
+      sessionStoreMongoUri: "", // optional persistent store
+      publicBaseUrl: "", // optional external URL override
       secureCookies: "auto",
       trustProxy: false,
       rateLimit: { windowMs: 60_000, max: 100 },
@@ -297,26 +380,37 @@ export class DashboardService {
     if (config && typeof config === "object") {
       if (typeof config.enabled === "boolean") normalized.enabled = config.enabled;
       if (Number.isFinite(config.port)) normalized.port = config.port;
-      if (typeof config.basePath === "string") normalized.basePath = config.basePath.trim() || "/";
+      if (typeof config.basePath === "string")
+        normalized.basePath = config.basePath.trim() || "/";
       if (Array.isArray(config.guildAllowList)) {
         normalized.guildAllowList = config.guildAllowList
           .map((value) => String(value).trim())
           .filter(Boolean);
       }
       if (typeof config.username === "string") normalized.username = config.username.trim();
-      if (typeof config.passwordHash === "string") normalized.passwordHash = config.passwordHash.trim();
-      if (typeof config.sessionSecret === "string") normalized.sessionSecret = config.sessionSecret.trim();
+      if (typeof config.passwordHash === "string")
+        normalized.passwordHash = config.passwordHash.trim();
+      if (typeof config.sessionSecret === "string")
+        normalized.sessionSecret = config.sessionSecret.trim();
+      if (typeof config.publicBaseUrl === "string")
+        normalized.publicBaseUrl = config.publicBaseUrl.trim();
+      if (typeof config.sessionStoreMongoUri === "string")
+        normalized.sessionStoreMongoUri = config.sessionStoreMongoUri.trim();
       if (config.secureCookies === "auto" || typeof config.secureCookies === "boolean") {
         normalized.secureCookies = config.secureCookies;
       }
       if (config.trustProxy !== undefined) normalized.trustProxy = config.trustProxy;
       if (config.rateLimit && typeof config.rateLimit === "object") {
-        if (Number.isFinite(config.rateLimit.windowMs)) normalized.rateLimit.windowMs = Math.max(1, config.rateLimit.windowMs);
-        if (Number.isFinite(config.rateLimit.max)) normalized.rateLimit.max = Math.max(1, config.rateLimit.max);
+        if (Number.isFinite(config.rateLimit.windowMs))
+          normalized.rateLimit.windowMs = Math.max(1, config.rateLimit.windowMs);
+        if (Number.isFinite(config.rateLimit.max))
+          normalized.rateLimit.max = Math.max(1, config.rateLimit.max);
       }
       if (config.loginRateLimit && typeof config.loginRateLimit === "object") {
-        if (Number.isFinite(config.loginRateLimit.windowMs)) normalized.loginRateLimit.windowMs = Math.max(1, config.loginRateLimit.windowMs);
-        if (Number.isFinite(config.loginRateLimit.max)) normalized.loginRateLimit.max = Math.max(1, config.loginRateLimit.max);
+        if (Number.isFinite(config.loginRateLimit.windowMs))
+          normalized.loginRateLimit.windowMs = Math.max(1, config.loginRateLimit.windowMs);
+        if (Number.isFinite(config.loginRateLimit.max))
+          normalized.loginRateLimit.max = Math.max(1, config.loginRateLimit.max);
       }
       if (Number.isFinite(config.sessionMaxAgeMs)) {
         normalized.sessionMaxAgeMs = Math.max(60_000, config.sessionMaxAgeMs);
@@ -328,7 +422,8 @@ export class DashboardService {
   }
 
   #buildDashboardUrl({ hostname, port, basePath, protocol }) {
-    const sanitizedHostname = typeof hostname === "string" && hostname.length > 0 ? hostname : "localhost";
+    const sanitizedHostname =
+      typeof hostname === "string" && hostname.length > 0 ? hostname : "localhost";
     const origin = port
       ? `${protocol}://${sanitizedHostname}:${port}`
       : `${protocol}://${sanitizedHostname}`;
@@ -421,7 +516,7 @@ export class DashboardService {
         next();
         return;
       }
-      res.setHeader("WWW-Authenticate", "Session realm=\"Private Dashboard\"");
+      res.setHeader('WWW-Authenticate', 'Session realm="Private Dashboard"');
       res.status(401).json({ error: "Unauthorized" });
     };
   }
@@ -454,7 +549,8 @@ export class DashboardService {
           reason: "insecure_transport"
         });
         res.status(400).json({
-          error: "Secure cookies are enabled; access the dashboard over HTTPS or disable PRIVATE_DASHBOARD_SECURE_COOKIES."
+          error:
+            "Secure cookies are enabled; access the dashboard over HTTPS or disable PRIVATE_DASHBOARD_SECURE_COOKIES."
         });
         return;
       }
@@ -465,7 +561,8 @@ export class DashboardService {
           reason: "proxy_not_trusted"
         });
         res.status(400).json({
-          error: "Secure cookies are enabled, but the proxy is not trusted. Set PRIVATE_DASHBOARD_TRUST_PROXY to trust the reverse proxy."
+          error:
+            "Secure cookies are enabled, but the proxy is not trusted. Set PRIVATE_DASHBOARD_TRUST_PROXY to trust the reverse proxy."
         });
         return;
       }
@@ -493,7 +590,6 @@ export class DashboardService {
     }
 
     const passwordMatches = await this.#verifyPassword(providedPassword);
-
     const usernameMatches = this.#safeCompare(providedUsername, this.#config.username);
 
     if (!passwordMatches || !usernameMatches) {
@@ -501,7 +597,7 @@ export class DashboardService {
         ...attemptContext,
         reason: "invalid_credentials"
       });
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 150));
       res.status(401).json({ error: "Invalid username or password" });
       return;
     }
@@ -526,7 +622,8 @@ export class DashboardService {
           req.session.username = this.#config.username;
           req.session.createdAt = Date.now();
         } catch (assignError) {
-          const message = assignError instanceof Error ? assignError.message : String(assignError);
+          const message =
+            assignError instanceof Error ? assignError.message : String(assignError);
           this.#logger?.error?.("dashboard.login_failed", {
             ...attemptContext,
             reason: "session_assignment_failed",
@@ -612,13 +709,13 @@ export class DashboardService {
   }
 
   #commitSession(req) {
-    const session = req.session;
-    if (!session || typeof session.save !== "function") {
+    const sess = req.session;
+    if (!sess || typeof sess.save !== "function") {
       return Promise.reject(new Error("Session is not available"));
     }
 
     return new Promise((resolve, reject) => {
-      session.save((error) => {
+      sess.save((error) => {
         if (error) {
           reject(error);
           return;
@@ -654,8 +751,8 @@ export class DashboardService {
     }
     const allowList = Array.isArray(this.#config.guildAllowList)
       ? this.#config.guildAllowList
-        .map((value) => String(value).trim())
-        .filter(Boolean)
+          .map((value) => String(value).trim())
+          .filter(Boolean)
       : [];
     if (allowList.length) {
       return { guildId: { $in: allowList } };
@@ -772,7 +869,8 @@ export class DashboardService {
     const guildStats = [];
 
     for (const id of targetGuildIds) {
-      const guild = client.guilds.cache?.get?.(id) ?? await client.guilds.fetch(id).catch(() => null);
+      const guild =
+        client.guilds.cache?.get?.(id) ?? (await client.guilds.fetch(id).catch(() => null));
       if (!guild) continue;
 
       let fetchedGuild = guild;
@@ -794,21 +892,13 @@ export class DashboardService {
 
       try {
         await guild.roles?.fetch?.();
-      } catch {
-        // ignore role fetch failures
-      }
-
+      } catch {}
       try {
         await guild.emojis?.fetch?.();
-      } catch {
-        // ignore emoji fetch failures
-      }
-
+      } catch {}
       try {
         await guild.stickers?.fetch?.();
-      } catch {
-        // ignore sticker fetch failures
-      }
+      } catch {}
 
       const channelCounts = {
         total: 0,
@@ -855,7 +945,9 @@ export class DashboardService {
 
       const memberCount = Number.isFinite(fetchedGuild?.memberCount)
         ? fetchedGuild.memberCount
-        : (Number.isFinite(guild.memberCount) ? guild.memberCount : null);
+        : Number.isFinite(guild.memberCount)
+        ? guild.memberCount
+        : null;
       const approximateMemberCount = Number.isFinite(fetchedGuild?.approximateMemberCount)
         ? fetchedGuild.approximateMemberCount
         : null;
@@ -864,14 +956,18 @@ export class DashboardService {
         : null;
       const resolvedMemberCount = Number.isFinite(memberCount)
         ? memberCount
-        : (Number.isFinite(approximateMemberCount) ? approximateMemberCount : null);
+        : Number.isFinite(approximateMemberCount)
+        ? approximateMemberCount
+        : null;
 
       const roleCount = guild.roles?.cache?.size ?? 0;
       const emojiCount = guild.emojis?.cache?.size ?? 0;
       const stickerCount = guild.stickers?.cache?.size ?? 0;
       const boostCount = Number.isFinite(fetchedGuild?.premiumSubscriptionCount)
         ? fetchedGuild.premiumSubscriptionCount
-        : (Number.isFinite(guild.premiumSubscriptionCount) ? guild.premiumSubscriptionCount : null);
+        : Number.isFinite(guild.premiumSubscriptionCount)
+        ? guild.premiumSubscriptionCount
+        : null;
 
       const guildData = {
         id: guild.id,
@@ -886,12 +982,18 @@ export class DashboardService {
         boostLevel: fetchedGuild?.premiumTier ?? guild.premiumTier ?? null,
         boostCount,
         ownerId: fetchedGuild?.ownerId ?? guild.ownerId ?? null,
-        createdAt: fetchedGuild?.createdAt instanceof Date
-          ? fetchedGuild.createdAt.toISOString()
-          : (guild.createdAt instanceof Date ? guild.createdAt.toISOString() : null),
-        shardId: typeof fetchedGuild?.shardId === "number"
-          ? fetchedGuild.shardId
-          : (typeof guild.shardId === "number" ? guild.shardId : null)
+        createdAt:
+          fetchedGuild?.createdAt instanceof Date
+            ? fetchedGuild.createdAt.toISOString()
+            : guild.createdAt instanceof Date
+            ? guild.createdAt.toISOString()
+            : null,
+        shardId:
+          typeof fetchedGuild?.shardId === "number"
+            ? fetchedGuild.shardId
+            : typeof guild.shardId === "number"
+            ? guild.shardId
+            : null
       };
 
       guildStats.push(guildData);
@@ -929,7 +1031,6 @@ export class DashboardService {
     return { totals, guilds: guildStats, generatedAt, insights, moderation };
   }
 
-
   #buildDerivedServerMetrics({ totals, guilds }) {
     const guildCount = Array.isArray(guilds) ? guilds.length : 0;
     if (!guildCount) {
@@ -940,12 +1041,20 @@ export class DashboardService {
       };
     }
 
-    const memberCounts = guilds.map((g) => Number.isFinite(g.memberCount) ? g.memberCount : null);
-    const presenceCounts = guilds.map((g) => Number.isFinite(g.approxPresenceCount) ? g.approxPresenceCount : null);
-    const boostCounts = guilds.map((g) => Number.isFinite(g.boostCount) ? g.boostCount : null);
+    const memberCounts = guilds.map((g) =>
+      Number.isFinite(g.memberCount) ? g.memberCount : null
+    );
+    const presenceCounts = guilds.map((g) =>
+      Number.isFinite(g.approxPresenceCount) ? g.approxPresenceCount : null
+    );
+    const boostCounts = guilds.map((g) => (Number.isFinite(g.boostCount) ? g.boostCount : null));
 
     const onlineRatios = guilds.map((g) => {
-      if (!Number.isFinite(g.memberCount) || !Number.isFinite(g.approxPresenceCount) || !g.memberCount) {
+      if (
+        !Number.isFinite(g.memberCount) ||
+        !Number.isFinite(g.approxPresenceCount) ||
+        !g.memberCount
+      ) {
         return null;
       }
       return g.approxPresenceCount / g.memberCount;
@@ -1003,14 +1112,20 @@ export class DashboardService {
         memberCount: {
           average: this.#calculateAverage(memberCounts),
           median: this.#calculateMedian(memberCounts),
-          min: sortedByMembers.length ? sortedByMembers[sortedByMembers.length - 1].memberCount ?? null : null,
+          min: sortedByMembers.length
+            ? sortedByMembers[sortedByMembers.length - 1].memberCount ?? null
+            : null,
           max: sortedByMembers.length ? sortedByMembers[0].memberCount ?? null : null
         },
         presenceCount: {
           average: this.#calculateAverage(presenceCounts),
           median: this.#calculateMedian(presenceCounts),
-          min: sortedByPresence.length ? sortedByPresence[sortedByPresence.length - 1].approxPresenceCount ?? null : null,
-          max: sortedByPresence.length ? sortedByPresence[0].approxPresenceCount ?? null : null
+          min: sortedByPresence.length
+            ? sortedByPresence[sortedByPresence.length - 1].approxPresenceCount ?? null
+            : null,
+          max: sortedByPresence.length
+            ? sortedByPresence[0].approxPresenceCount ?? null
+            : null
         }
       }
     };
@@ -1060,18 +1175,19 @@ export class DashboardService {
       this.#moderationActionModel.countDocuments({
         ...actionFilter,
         expungedAt: null,
-        $or: [
-          { expiresAt: null, completedAt: null },
-          { expiresAt: { $gt: now } }
-        ]
+        $or: [{ expiresAt: null, completedAt: null }, { expiresAt: { $gt: now } }]
       })
     ]);
 
     const warningWindowCounts = await Promise.all(
-      windows.map((window) => this.#warningModel.countDocuments(addDateFilter(warningFilter, window.since)))
+      windows.map((window) =>
+        this.#warningModel.countDocuments(addDateFilter(warningFilter, window.since))
+      )
     );
     const actionWindowCounts = await Promise.all(
-      windows.map((window) => this.#moderationActionModel.countDocuments(addDateFilter(actionFilter, window.since)))
+      windows.map((window) =>
+        this.#moderationActionModel.countDocuments(addDateFilter(actionFilter, window.since))
+      )
     );
 
     const actionBreakdown = await this.#moderationActionModel.aggregate([
@@ -1229,7 +1345,9 @@ export class DashboardService {
       }
     ]);
 
-    const startOfTodayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const startOfTodayUtc = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    );
     const timelineStart = new Date(startOfTodayUtc);
     timelineStart.setUTCDate(timelineStart.getUTCDate() - 13);
 
@@ -1381,28 +1499,30 @@ export class DashboardService {
       target.lastActionAt = normalizeDate(entry.lastActionAt);
     }
 
-    const guildBreakdown = Array.from(guildMap.values()).map((entry) => {
-      const lastActivity = [entry.lastWarningAt, entry.lastActionAt]
-        .filter(Boolean)
-        .sort((a, b) => (a > b ? -1 : 1))[0] ?? null;
-      return {
-        guildId: entry.guildId,
-        warningCount: entry.warningCount,
-        actionCount: entry.actionCount,
-        warningUserCount: entry.warningUserCount,
-        actionUserCount: entry.actionUserCount,
-        uniqueUsers: Math.max(entry.warningUserCount ?? 0, entry.actionUserCount ?? 0),
-        lastWarningAt: entry.lastWarningAt,
-        lastActionAt: entry.lastActionAt,
-        lastActivityAt: lastActivity,
-        guild: this.#buildGuildSnapshot(entry.guildId)
-      };
-    }).sort((a, b) => {
-      const scoreA = (a.warningCount ?? 0) + (a.actionCount ?? 0);
-      const scoreB = (b.warningCount ?? 0) + (b.actionCount ?? 0);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return a.guildId.localeCompare(b.guildId);
-    });
+    const guildBreakdown = Array.from(guildMap.values())
+      .map((entry) => {
+        const lastActivity =
+          [entry.lastWarningAt, entry.lastActionAt].filter(Boolean).sort((a, b) => (a > b ? -1 : 1))[0] ??
+          null;
+        return {
+          guildId: entry.guildId,
+          warningCount: entry.warningCount,
+          actionCount: entry.actionCount,
+          warningUserCount: entry.warningUserCount,
+          actionUserCount: entry.actionUserCount,
+          uniqueUsers: Math.max(entry.warningUserCount ?? 0, entry.actionUserCount ?? 0),
+          lastWarningAt: entry.lastWarningAt,
+          lastActionAt: entry.lastActionAt,
+          lastActivityAt: lastActivity,
+          guild: this.#buildGuildSnapshot(entry.guildId)
+        };
+      })
+      .sort((a, b) => {
+        const scoreA = (a.warningCount ?? 0) + (a.actionCount ?? 0);
+        const scoreB = (b.warningCount ?? 0) + (b.actionCount ?? 0);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return a.guildId.localeCompare(b.guildId);
+      });
 
     const guildSet = new Set();
     guildBreakdown.forEach((entry) => {
@@ -1544,7 +1664,7 @@ export class DashboardService {
         base.botCount = botCount;
         base.humanCount = humanCount;
       } else if (memberCollection?.size) {
-        // attempt to derive counts from member cache
+        // derive counts from member cache
         let botCount = 0;
         let humanCount = 0;
         memberCollection.forEach((member) => {
@@ -1576,7 +1696,9 @@ export class DashboardService {
 
     roles.sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
 
-    const memberCounts = roles.map((role) => Number.isFinite(role.memberCount) ? role.memberCount : null);
+    const memberCounts = roles.map((role) =>
+      Number.isFinite(role.memberCount) ? role.memberCount : null
+    );
     const rolesWithCounts = roles
       .filter((role) => Number.isFinite(role.memberCount))
       .sort((a, b) => (b.memberCount ?? 0) - (a.memberCount ?? 0));
@@ -1596,7 +1718,9 @@ export class DashboardService {
         average: this.#calculateAverage(memberCounts),
         median: this.#calculateMedian(memberCounts),
         max: rolesWithCounts.length ? rolesWithCounts[0].memberCount ?? null : null,
-        min: rolesWithCounts.length ? rolesWithCounts[rolesWithCounts.length - 1].memberCount ?? null : null
+        min: rolesWithCounts.length
+          ? rolesWithCounts[rolesWithCounts.length - 1].memberCount ?? null
+          : null
       },
       permissionUsage: Array.from(permissionUsage.entries())
         .sort((a, b) => b[1] - a[1])
@@ -1675,16 +1799,17 @@ export class DashboardService {
         parentId: channel.parentId ?? null,
         parentName: channel.parent?.name ?? null,
         position: typeof channel.rawPosition === "number" ? channel.rawPosition : null,
-        topic: "topic" in channel ? (channel.topic || null) : null,
+        topic: "topic" in channel ? channel.topic || null : null,
         nsfw: Boolean(channel.nsfw),
         rateLimitPerUser: "rateLimitPerUser" in channel ? channel.rateLimitPerUser ?? null : null,
         memberCount: null,
         botCount: null,
-        userLimit: "userLimit" in channel ? (channel.userLimit || null) : null,
+        userLimit: "userLimit" in channel ? channel.userLimit || null : null,
         bitrate: "bitrate" in channel ? channel.bitrate ?? null : null,
         videoQualityMode: "videoQualityMode" in channel ? channel.videoQualityMode ?? null : null,
         archived: "archived" in channel ? Boolean(channel.archived) : null,
-        autoArchiveDuration: "autoArchiveDuration" in channel ? channel.autoArchiveDuration ?? null : null,
+        autoArchiveDuration:
+          "autoArchiveDuration" in channel ? channel.autoArchiveDuration ?? null : null,
         locked: "locked" in channel ? Boolean(channel.locked) : null,
         invitable: "invitable" in channel ? Boolean(channel.invitable) : null,
         isTextBased: typeof channel.isTextBased === "function" ? channel.isTextBased() : false,
@@ -1693,14 +1818,16 @@ export class DashboardService {
       };
 
       if (detail.nsfw) nsfwChannels += 1;
-      if (typeof detail.rateLimitPerUser === "number" && detail.rateLimitPerUser > 0) slowmodeEnabled += 1;
+      if (typeof detail.rateLimitPerUser === "number" && detail.rateLimitPerUser > 0)
+        slowmodeEnabled += 1;
 
       if (channel.lastMessage?.createdTimestamp) {
         detail.lastActivityAt = new Date(channel.lastMessage.createdTimestamp).toISOString();
       } else if (typeof channel.lastPinTimestamp === "number" && channel.lastPinTimestamp > 0) {
         detail.lastActivityAt = new Date(channel.lastPinTimestamp).toISOString();
-      } else if ("archiveTimestamp" in channel && typeof channel.archiveTimestamp === "number") {
-        detail.lastActivityAt = new Date(channel.archiveTimestamp).toISOString();
+      } else if ("archivedAt" in channel && channel.archivedAt instanceof Date) {
+        // better than checking for numeric archiveTimestamp
+        detail.lastActivityAt = channel.archivedAt.toISOString();
       }
 
       if (channel.type === ChannelType.GuildText) {
@@ -1716,7 +1843,10 @@ export class DashboardService {
       } else if (channel.type === ChannelType.GuildCategory) {
         typeCounters.category += 1;
         try {
-          detail.childCount = channel.children?.cache?.size ?? null;
+          // compute child count from the collection
+          detail.childCount = channelCollection
+            ? channelCollection.filter((c) => c?.parentId === channel.id).size ?? null
+            : null;
         } catch {
           detail.childCount = null;
         }
@@ -1744,14 +1874,24 @@ export class DashboardService {
           if (member.user?.bot) botCount += 1;
         });
         detail.botCount = botCount;
-        if (channel.type === ChannelType.GuildVoice || channel.type === ChannelType.GuildStageVoice) {
+        if (
+          channel.type === ChannelType.GuildVoice ||
+          channel.type === ChannelType.GuildStageVoice
+        ) {
           activeVoiceUsers += channel.members.size;
         }
       }
 
-      if ((channel.type === ChannelType.GuildVoice || channel.type === ChannelType.GuildStageVoice) && detail.userLimit) {
+      if (
+        (channel.type === ChannelType.GuildVoice ||
+          channel.type === ChannelType.GuildStageVoice) &&
+        detail.userLimit
+      ) {
         voiceCapacity += detail.userLimit;
-      } else if (channel.type === ChannelType.GuildVoice || channel.type === ChannelType.GuildStageVoice) {
+      } else if (
+        channel.type === ChannelType.GuildVoice ||
+        channel.type === ChannelType.GuildStageVoice
+      ) {
         voiceUnlimited += 1;
       }
 
@@ -1925,8 +2065,8 @@ export class DashboardService {
       if (entry.lastWarningAt && (!sum.lastWarningAt || entry.lastWarningAt > sum.lastWarningAt)) {
         sum.lastWarningAt = entry.lastWarningAt;
       }
-      (entry.guildIds || []).forEach(id => sum.guildIds.add(id));
-      (entry.moderatorIds || []).forEach(id => id && sum.moderatorIds.add(String(id)));
+      (entry.guildIds || []).forEach((id) => sum.guildIds.add(id));
+      (entry.moderatorIds || []).forEach((id) => id && sum.moderatorIds.add(String(id)));
     }
 
     for (const entry of actionTotals) {
@@ -1935,8 +2075,8 @@ export class DashboardService {
       if (entry.lastActionAt && (!sum.lastActionAt || entry.lastActionAt > sum.lastActionAt)) {
         sum.lastActionAt = entry.lastActionAt;
       }
-      (entry.guildIds || []).forEach(id => sum.guildIds.add(id));
-      (entry.moderatorIds || []).forEach(id => id && sum.moderatorIds.add(String(id)));
+      (entry.guildIds || []).forEach((id) => sum.guildIds.add(id));
+      (entry.moderatorIds || []).forEach((id) => id && sum.moderatorIds.add(String(id)));
     }
 
     for (const entry of actionBreakdown) {
@@ -1950,9 +2090,9 @@ export class DashboardService {
     const result = [];
     for (const sum of summaryMap.values()) {
       const discordUser = this.#resolveDiscordUser(sum.userId);
-      const lastActivity = [sum.lastWarningAt, sum.lastActionAt]
-        .filter(Boolean)
-        .sort((a, b) => (a > b ? -1 : 1))[0] ?? null;
+      const lastActivity =
+        [sum.lastWarningAt, sum.lastActionAt].filter(Boolean).sort((a, b) => (a > b ? -1 : 1))[0] ??
+        null;
       const topActions = Object.entries(sum.actionBreakdown)
         .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
         .slice(0, 3)
@@ -2055,31 +2195,42 @@ export class DashboardService {
       actionTypeCounts.set(actionName, (actionTypeCounts.get(actionName) ?? 0) + 1);
     }
 
-    const guildBreakdown = Array.from(guildBreakdownMap.values()).map((entry) => {
-      const lastActivity = [entry.lastWarningAt, entry.lastActionAt]
-        .filter(Boolean)
-        .sort((a, b) => (a > b ? -1 : 1))[0] ?? null;
-      return {
-        guildId: entry.guildId,
-        warningCount: entry.warningCount,
-        actionCount: entry.actionCount,
-        lastWarningAt: entry.lastWarningAt instanceof Date
-          ? entry.lastWarningAt.toISOString()
-          : (entry.lastWarningAt ? new Date(entry.lastWarningAt).toISOString() : null),
-        lastActionAt: entry.lastActionAt instanceof Date
-          ? entry.lastActionAt.toISOString()
-          : (entry.lastActionAt ? new Date(entry.lastActionAt).toISOString() : null),
-        lastActivityAt: lastActivity instanceof Date
-          ? lastActivity.toISOString()
-          : (lastActivity ? new Date(lastActivity).toISOString() : null),
-        moderators: [...entry.moderators]
-      };
-    }).sort((a, b) => {
-      const scoreA = (a.warningCount ?? 0) + (a.actionCount ?? 0);
-      const scoreB = (b.warningCount ?? 0) + (b.actionCount ?? 0);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return a.guildId.localeCompare(b.guildId);
-    });
+    const guildBreakdown = Array.from(guildBreakdownMap.values())
+      .map((entry) => {
+        const lastActivity =
+          [entry.lastWarningAt, entry.lastActionAt].filter(Boolean).sort((a, b) => (a > b ? -1 : 1))[0] ??
+          null;
+        return {
+          guildId: entry.guildId,
+          warningCount: entry.warningCount,
+          actionCount: entry.actionCount,
+          lastWarningAt:
+            entry.lastWarningAt instanceof Date
+              ? entry.lastWarningAt.toISOString()
+              : entry.lastWarningAt
+              ? new Date(entry.lastWarningAt).toISOString()
+              : null,
+          lastActionAt:
+            entry.lastActionAt instanceof Date
+              ? entry.lastActionAt.toISOString()
+              : entry.lastActionAt
+              ? new Date(entry.lastActionAt).toISOString()
+              : null,
+          lastActivityAt:
+            lastActivity instanceof Date
+              ? lastActivity.toISOString()
+              : lastActivity
+              ? new Date(lastActivity).toISOString()
+              : null,
+          moderators: [...entry.moderators]
+        };
+      })
+      .sort((a, b) => {
+        const scoreA = (a.warningCount ?? 0) + (a.actionCount ?? 0);
+        const scoreB = (b.warningCount ?? 0) + (b.actionCount ?? 0);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return a.guildId.localeCompare(b.guildId);
+      });
 
     const actionSummary = Array.from(actionTypeCounts.entries())
       .sort((a, b) => b[1] - a[1])
@@ -2095,16 +2246,25 @@ export class DashboardService {
       user: this.#resolveDiscordUser(id)
     }));
 
-    const lastActivityAt = [
-      ...warnings.map((warning) => warning.createdAt instanceof Date
-        ? warning.createdAt.getTime()
-        : (warning.createdAt ? new Date(warning.createdAt).getTime() : null)),
-      ...actions.map((action) => action.createdAt instanceof Date
-        ? action.createdAt.getTime()
-        : (action.createdAt ? new Date(action.createdAt).getTime() : null))
-    ]
-      .filter((value) => typeof value === "number" && Number.isFinite(value))
-      .sort((a, b) => b - a)[0] ?? null;
+    const lastActivityAt =
+      [
+        ...warnings.map((warning) =>
+          warning.createdAt instanceof Date
+            ? warning.createdAt.getTime()
+            : warning.createdAt
+            ? new Date(warning.createdAt).getTime()
+            : null
+        ),
+        ...actions.map((action) =>
+          action.createdAt instanceof Date
+            ? action.createdAt.getTime()
+            : action.createdAt
+            ? new Date(action.createdAt).getTime()
+            : null
+        )
+      ]
+        .filter((value) => typeof value === "number" && Number.isFinite(value))
+        .sort((a, b) => b - a)[0] ?? null;
 
     return {
       userId: String(userId),
@@ -2216,1940 +2376,248 @@ export class DashboardService {
     });
   }
 
-  #renderPage({ basePath, authenticated, username }) {
+  #renderPage({ basePath, authenticated, username, cspNonce }) {
+    // Minimal, robust dashboard shell (nonce-based CSP, no unsafe-inline)
     const base = this.#normalizeBasePath(basePath);
     const apiBase = base === "/" ? "/api" : `${base}/api`;
     const authBase = base === "/" ? "/auth" : `${base}/auth`;
     const isAuthenticated = Boolean(authenticated);
-    const authenticatedJson = JSON.stringify(isAuthenticated);
-    const usernameJson = JSON.stringify(username || "");
     const escapedUsername = this.#escapeHtml(username || "");
-    const loginHiddenAttr = isAuthenticated ? " hidden" : "";
-    const dashboardHiddenAttr = isAuthenticated ? "" : " hidden";
-    const sessionMetaText = isAuthenticated
-      ? (escapedUsername ? `Signed in as ${escapedUsername}.` : "Signed in.")
-      : "Please sign in to access moderation data.";
-    const loginAutofocusAttr = isAuthenticated ? "" : " autofocus";
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Private Moderation Dashboard</title>
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 1.5rem; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
-    main { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem; }
-    h1 { margin-bottom: 0.25rem; }
-    h2 { margin: 0; font-size: 1.4rem; }
-    h3 { margin: 0 0 0.75rem 0; font-size: 1.1rem; }
-    h4 { margin: 0 0 0.5rem 0; font-size: 1rem; }
-    p { margin: 0; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #1e293b; padding: 0.5rem 0.6rem; text-align: left; vertical-align: top; }
-    th { background: #1e3a8a; font-weight: 600; }
-    tr:nth-child(even) { background: rgba(148, 163, 184, 0.08); }
-    tr.selected { background: rgba(37, 99, 235, 0.25); }
-    .table-wrapper { margin-top: 1rem; overflow-x: auto; }
-    .meta { font-size: 0.85rem; color: #94a3b8; }
-    .error { color: #f87171; margin-top: 0.75rem; font-size: 0.9rem; }
-    .page-header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1rem; }
-    .card { background: rgba(15, 23, 42, 0.94); border: 1px solid #1e293b; border-radius: 0.9rem; padding: 1.5rem; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.45); }
-    form { display: grid; gap: 1rem; max-width: 320px; }
-    label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; color: #cbd5f5; }
-    input { padding: 0.55rem 0.65rem; border-radius: 0.65rem; border: 1px solid #334155; background: rgba(15, 23, 42, 0.6); color: inherit; }
-    input:focus { outline: 2px solid #2563eb; outline-offset: 2px; }
-    button { padding: 0.55rem 0.85rem; border-radius: 0.65rem; border: 1px solid transparent; background: #2563eb; color: white; font-weight: 600; cursor: pointer; transition: background 0.2s ease, transform 0.15s ease; }
-    button:hover { background: #1d4ed8; }
-    button:active { transform: translateY(1px); }
-    button:disabled { opacity: 0.65; cursor: not-allowed; }
-    .danger-btn { background: #ef4444; }
-    .danger-btn:hover { background: #dc2626; }
-    .ghost-btn { background: transparent; border-color: #334155; color: #cbd5f5; font-weight: 500; }
-    .ghost-btn:hover { background: rgba(148, 163, 184, 0.12); }
-    .dashboard-controls { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
-    .filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; }
-    .tabs { display: flex; gap: 0.5rem; margin-top: 1.5rem; border-bottom: 1px solid #1e293b; }
-    .tab { background: transparent; border: none; border-bottom: 2px solid transparent; color: #cbd5f5; border-radius: 0.65rem 0.65rem 0 0; }
-    .tab:hover { background: rgba(37, 99, 235, 0.12); }
-    .tab.active { color: #f8fafc; border-color: #2563eb; background: rgba(37, 99, 235, 0.18); }
-    .tab-panel { margin-top: 1.25rem; display: none; }
-    .tab-panel[hidden] { display: none !important; }
-    .tab-panel.active { display: block; }
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-top: 1.25rem; }
-    .stat-pill { background: rgba(30, 64, 175, 0.25); border: 1px solid rgba(59, 130, 246, 0.5); border-radius: 0.85rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.35rem; min-height: 90px; }
-    .stat-pill .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #cbd5f5; }
-    .stat-pill .value { font-size: 1.5rem; font-weight: 600; color: #f8fafc; }
-    .stat-pill .description { font-size: 0.8rem; color: #94a3b8; }
-    .insights-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1.25rem; }
-    .stat-card { background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 0.85rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
-    .stat-card dl { display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 0.65rem; margin: 0; font-size: 0.9rem; }
-    .stat-card dt { color: #cbd5f5; }
-    .stat-card dd { margin: 0; color: #f8fafc; font-weight: 600; }
-    .stat-card ol { margin: 0; padding-left: 1rem; display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.9rem; }
-    .stat-card li { display: flex; justify-content: space-between; gap: 0.75rem; }
-    .stat-card li .value { color: #cbd5f5; font-weight: 600; }
-    .stat-card ol.profile-list { list-style: none; padding-left: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-    .stat-card ol.profile-list li { display: flex; justify-content: space-between; gap: 0.75rem; }
-    .stat-card .profile-info { display: flex; flex-direction: column; gap: 0.2rem; }
-    .stat-card .profile-info .name { font-weight: 600; color: #f8fafc; }
-    .stat-card .profile-info .meta { color: #94a3b8; font-size: 0.75rem; }
-    .guild-cell { display: flex; align-items: center; gap: 0.75rem; }
-    .guild-icon { width: 36px; height: 36px; border-radius: 25%; background: #1e293b; object-fit: cover; flex-shrink: 0; }
-    .guild-icon.placeholder { display: flex; align-items: center; justify-content: center; font-weight: 600; color: #94a3b8; }
-    .user-cell { display: flex; align-items: center; gap: 0.75rem; min-width: 220px; }
-    .avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: #1e293b; flex-shrink: 0; }
-    .avatar.placeholder { display: flex; align-items: center; justify-content: center; font-weight: 600; color: #cbd5f5; }
-    .user-meta { display: flex; flex-direction: column; gap: 0.2rem; }
-    .user-meta .tag { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 0.8rem; color: #94a3b8; }
-    .section-status { margin-top: 0.25rem; font-size: 0.85rem; color: #94a3b8; }
-    .detail-card { margin-top: 1.5rem; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 1rem; padding: 1.25rem; background: rgba(15, 23, 42, 0.85); display: none; flex-direction: column; gap: 1rem; }
-    .detail-card.active { display: flex; }
-    .detail-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
-    .metric { background: rgba(37, 99, 235, 0.15); border: 1px solid rgba(37, 99, 235, 0.35); border-radius: 0.75rem; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem; }
-    .metric .label { font-size: 0.75rem; text-transform: uppercase; color: #bfdbfe; letter-spacing: 0.05em; }
-    .metric .value { font-size: 1.25rem; font-weight: 600; }
-    .detail-sections { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-    .chip-group { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-    .chip { padding: 0.25rem 0.55rem; border-radius: 999px; background: rgba(37, 99, 235, 0.18); border: 1px solid rgba(37, 99, 235, 0.35); font-size: 0.75rem; color: #bfdbfe; }
-    .color-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(148, 163, 184, 0.4); margin-right: 0.5rem; flex-shrink: 0; }
-    .channel-icon { margin-right: 0.5rem; }
-    .flag-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-    .flag { background: rgba(148, 163, 184, 0.18); border-radius: 999px; padding: 0.2rem 0.45rem; font-size: 0.75rem; color: #cbd5f5; border: 1px solid rgba(148, 163, 184, 0.35); }
-    .compact-table th, .compact-table td { font-size: 0.85rem; }
-    .empty-state { margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; background: rgba(15, 23, 42, 0.6); border-radius: 0.35rem; padding: 0.1rem 0.35rem; }
-    .overview-subsection { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 1.5rem; }
-    .section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
-    .timeline-card { display: flex; flex-direction: column; gap: 0.75rem; }
-    .timeline-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
-    .timeline-entry { display: flex; flex-direction: column; gap: 0.3rem; }
-    .timeline-row { display: flex; align-items: center; gap: 0.75rem; }
-    .timeline-label { width: 110px; font-size: 0.85rem; color: #cbd5f5; }
-    .timeline-bar { flex: 1; height: 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.2); position: relative; overflow: hidden; }
-    .timeline-bar-fill { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(59, 130, 246, 0.85), rgba(37, 99, 235, 0.65)); border-radius: inherit; }
-    .timeline-value { min-width: 96px; text-align: right; font-size: 0.8rem; color: #cbd5f5; font-weight: 600; }
-    @media (max-width: 720px) {
-      body { padding: 1rem; }
-      .filters { width: 100%; flex-direction: column; align-items: stretch; }
-      .dashboard-controls { align-items: stretch; }
-      .danger-btn { width: 100%; }
-    }
+  <style nonce="${cspNonce}">
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 0; padding: 2rem; background: #0f172a; color: #e2e8f0; }
+    main { max-width: 980px; margin: 0 auto; display: grid; gap: 1rem; }
+    .card { background: rgba(15,23,42,.9); border: 1px solid #1e293b; border-radius: 12px; padding: 1rem; }
+    h1 { margin: 0 0 .25rem 0; }
+    input, button { font: inherit; }
+    input { padding: .5rem .65rem; border-radius: 8px; border: 1px solid #334155; background: rgba(15,23,42,.6); color: inherit; }
+    button { padding: .55rem .85rem; border-radius: 8px; border: 1px solid transparent; background: #2563eb; color: white; font-weight: 600; cursor: pointer; }
+    button.ghost { background: transparent; border-color: #334155; color: #cbd5f5; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .meta { color: #94a3b8; font-size: .9rem; }
+    pre { background: rgba(2,6,23,.6); border: 1px solid #1f2937; padding: .75rem; border-radius: 8px; overflow: auto; }
+    label { display: grid; gap: .25rem; font-size: .9rem; }
+    .error { color: #f87171; }
+    .ok { color: #34d399; }
   </style>
 </head>
 <body>
   <main>
-    <header class="page-header">
-      <div>
-        <h1>Private Moderation Dashboard</h1>
-        <p class="meta" id="session-meta">${sessionMetaText}</p>
-      </div>
+    <header>
+      <h1>Private Moderation Dashboard</h1>
+      <p class="meta" id="session-meta">${isAuthenticated ? `Signed in as ${escapedUsername || "unknown"}.` : "Please sign in to access moderation data."}</p>
     </header>
-    <section id="login-section" class="card"${loginHiddenAttr}>
-      <h2>Sign in</h2>
-      <form id="login-form" method="post" action="${authBase}/login" autocomplete="off">
-        <label>Username
-          <input id="login-username" name="username" autocomplete="username" required${loginAutofocusAttr} />
-        </label>
-        <label>Password
-          <input id="login-password" name="password" type="password" autocomplete="current-password" required />
-        </label>
-        <div class="actions">
-          <button type="submit">Sign in</button>
-          <span class="meta">Credentials are transmitted securely and never stored in the browser.</span>
-        </div>
-      </form>
-      <div class="error" id="login-error" hidden></div>
+
+    <section class="card" id="auth-card">
+      ${
+        isAuthenticated
+          ? `<div class="row">
+               <button id="logout-btn" type="button">Log out</button>
+             </div>`
+          : `<form class="row" id="login-form" method="post" action="${this.#escapeHtml(authBase)}/login" autocomplete="off">
+               <label>Username
+                 <input id="login-username" name="username" required autocomplete="username" />
+               </label>
+               <label>Password
+                 <input id="login-password" name="password" type="password" required autocomplete="current-password" />
+               </label>
+               <button type="submit">Sign in</button>
+               <span id="login-error" class="error" hidden></span>
+             </form>`
+      }
     </section>
-    <section id="dashboard-section" class="card"${dashboardHiddenAttr}>
-      <div class="dashboard-controls">
-        <div class="filters">
-          <label>Guild ID
-            <input id="guild-filter" placeholder="All guilds" />
-          </label>
-          <label id="user-search-wrapper" hidden>Search Users
-            <input id="user-search" placeholder="Filter by user or ID" />
-          </label>
-          <button id="refresh-btn" type="button">Refresh</button>
-        </div>
-        <button id="logout-btn" type="button" class="danger-btn">Log out</button>
+
+    <section class="card" id="controls-card"${isAuthenticated ? "" : " hidden"}>
+      <div class="row">
+        <label>Guild ID (optional)
+          <input id="guild-id" placeholder="All guilds" />
+        </label>
+        <button id="refresh-btn" type="button">Refresh</button>
       </div>
-      <nav class="tabs" id="tab-bar">
-        <button type="button" class="tab active" data-tab="overview">Overview</button>
-        <button type="button" class="tab" data-tab="users">Users</button>
-        <button type="button" class="tab" data-tab="roles">Roles</button>
-        <button type="button" class="tab" data-tab="channels">Channels</button>
-      </nav>
-      <section class="tab-panel active" data-tab-content="overview">
-        <h2>Server Overview</h2>
-        <div class="section-status" id="stats-status">Loading…</div>
-        <div class="error" id="stats-error" hidden></div>
-        <div id="stats-summary" class="stats-grid" hidden></div>
-        <div id="insights-grid" class="insights-grid" hidden></div>
-        <div id="moderation-section" class="overview-subsection" hidden>
-          <div class="section-heading">
-            <h3>Moderation Insights</h3>
-            <p class="meta" id="moderation-meta" hidden></p>
-          </div>
-          <div id="moderation-summary" class="stats-grid"></div>
-          <div id="moderation-lists" class="insights-grid"></div>
-          <div id="moderation-timeline" class="stat-card timeline-card" hidden></div>
-          <div class="table-wrapper" id="moderation-guild-wrapper" hidden>
-            <table id="moderation-guild-table">
-              <thead>
-                <tr>
-                  <th>Guild</th>
-                  <th>Warnings</th>
-                  <th>Actions</th>
-                  <th>Unique Users</th>
-                  <th>Last Activity</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <p class="empty-state" id="moderation-empty" hidden>No moderation records yet.</p>
-        </div>
-        <div class="table-wrapper" id="guild-stats-wrapper" hidden>
-          <table id="guild-stats-table">
-            <thead>
-              <tr>
-                <th>Guild</th>
-                <th>Members</th>
-                <th>Online</th>
-                <th>Online %</th>
-                <th>Channels</th>
-                <th>Roles</th>
-                <th>Boosts</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="tab-panel" data-tab-content="users" hidden>
-        <h2>User Moderation Activity</h2>
-        <div class="section-status" id="users-status">Loading…</div>
-        <div class="error" id="users-error" hidden></div>
-        <div class="table-wrapper">
-          <table id="user-table" hidden>
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Warnings</th>
-                <th>Actions</th>
-                <th>Top Actions</th>
-                <th>Last Activity</th>
-                <th>Moderators</th>
-                <th>Guilds</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div id="user-detail" class="detail-card" hidden></div>
-      </section>
-      <section class="tab-panel" data-tab-content="roles" hidden>
-        <h2>Role Insights</h2>
-        <div class="section-status" id="roles-status">Enter a guild ID to load role insights.</div>
-        <div class="error" id="roles-error" hidden></div>
-        <div id="role-summary" class="stats-grid" hidden></div>
-        <div id="role-top-list" class="insights-grid" hidden></div>
-        <div class="table-wrapper">
-          <table id="role-table" hidden>
-            <thead>
-              <tr>
-                <th>Role</th>
-                <th>Members</th>
-                <th>Bots</th>
-                <th>Humans</th>
-                <th>Permissions</th>
-                <th>Flags</th>
-                <th>Created</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="tab-panel" data-tab-content="channels" hidden>
-        <h2>Channel Inventory</h2>
-        <div class="section-status" id="channels-status">Enter a guild ID to load channel details.</div>
-        <div class="error" id="channels-error" hidden></div>
-        <div id="channel-summary" class="stats-grid" hidden></div>
-        <div class="table-wrapper">
-          <table id="channel-table" hidden>
-            <thead>
-              <tr>
-                <th>Channel</th>
-                <th>Type</th>
-                <th>Parent</th>
-                <th>Members</th>
-                <th>Voice / Rate Limit</th>
-                <th>Flags</th>
-                <th>Created</th>
-                <th>Last Activity</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
+    </section>
+
+    <section class="card" id="stats-card"${isAuthenticated ? "" : " hidden"}>
+      <div class="row">
+        <strong>Overview</strong>
+        <span id="stats-status" class="meta">—</span>
+      </div>
+      <pre id="stats-json" hidden></pre>
+      <span id="stats-error" class="error" hidden></span>
+    </section>
+
+    <section class="card" id="users-card"${isAuthenticated ? "" : " hidden"}>
+      <div class="row">
+        <strong>Users</strong>
+        <span id="users-status" class="meta">—</span>
+      </div>
+      <pre id="users-json" hidden></pre>
+      <span id="users-error" class="error" hidden></span>
     </section>
   </main>
-  <script>
+
+  <script nonce="${cspNonce}">
+  (function(){
     const API_BASE = ${JSON.stringify(apiBase)};
     const AUTH_BASE = ${JSON.stringify(authBase)};
-    let isAuthenticated = ${authenticatedJson};
-    let currentUser = ${usernameJson};
-    let activeTab = 'overview';
-    let currentGuildFilter = '';
-    let userSummaries = [];
-    const userDetailCache = new Map();
-    const roleCache = new Map();
-    const channelCache = new Map();
-    let statsSnapshot = null;
+    let isAuthenticated = ${JSON.stringify(isAuthenticated)};
 
-    const requireElement = (id) => {
-      const el = document.getElementById(id);
-      if (!el) {
-        throw new Error('Missing required dashboard element #' + id);
+    const $ = (id) => document.getElementById(id);
+
+    const updateAuthUI = (authed, username) => {
+      isAuthenticated = authed;
+      const authCard = $("auth-card");
+      const controlsCard = $("controls-card");
+      const statsCard = $("stats-card");
+      const usersCard = $("users-card");
+      const sessionMeta = $("session-meta");
+      if (authed) {
+        authCard.innerHTML = '<div class="row"><button id="logout-btn" type="button">Log out</button></div>';
+        sessionMeta.textContent = username ? ("Signed in as " + username + ".") : "Signed in.";
+        controlsCard.hidden = false;
+        statsCard.hidden = false;
+        usersCard.hidden = false;
+        bindLogout();
+      } else {
+        authCard.innerHTML =
+          '<form class="row" id="login-form" method="post" action="'+AUTH_BASE+'/login" autocomplete="off">'+
+          '<label>Username<input id="login-username" name="username" required autocomplete="username" /></label>'+
+          '<label>Password<input id="login-password" name="password" type="password" required autocomplete="current-password" /></label>'+
+          '<button type="submit">Sign in</button>'+
+          '<span id="login-error" class="error" hidden></span>'+
+          '</form>';
+        sessionMeta.textContent = "Please sign in to access moderation data.";
+        controlsCard.hidden = true;
+        statsCard.hidden = true;
+        usersCard.hidden = true;
+        bindLogin();
       }
-      return el;
     };
 
-    const ensureTableBody = (table, id) => {
-      if (!table) {
-        throw new Error('Missing required dashboard element #' + id);
-      }
-      const existing = table.querySelector('tbody');
-      if (existing) return existing;
-      const created = document.createElement('tbody');
-      table.appendChild(created);
-      return created;
+    const bindLogin = () => {
+      const form = $("login-form");
+      if (!form) return;
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const errorEl = $("login-error");
+        errorEl.hidden = true;
+        const username = $("login-username").value;
+        const password = $("login-password").value;
+        try {
+          const res = await fetch(AUTH_BASE + "/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ username, password })
+          });
+          const data = await res.json().catch(()=>({}));
+          if (!res.ok) {
+            errorEl.textContent = data?.error || ("Login failed ("+res.status+")");
+            errorEl.hidden = false;
+            return;
+          }
+          updateAuthUI(true, data?.username || username || "");
+          await refresh();
+        } catch (err) {
+          errorEl.textContent = String(err?.message || err);
+          errorEl.hidden = false;
+        }
+      });
     };
 
-    let loginSection;
-    let dashboardSection;
-    let loginForm;
-    let loginUsername;
-    let loginPassword;
-    let loginErrorEl;
-    let sessionMeta;
-    let guildFilterEl;
-    let userSearchWrapper;
-    let userSearchEl;
-    let refreshBtn;
-    let logoutBtn;
-    let tabBar;
-    let tabButtons;
-    let tabPanels;
-    let statsStatusEl;
-    let statsErrorEl;
-    let statsSummaryEl;
-    let insightsGrid;
-    let guildStatsWrapper;
-    let guildStatsTable;
-    let guildStatsBody;
-    let moderationSection;
-    let moderationSummaryEl;
-    let moderationListsEl;
-    let moderationTimelineCard;
-    let moderationGuildWrapper;
-    let moderationGuildTable;
-    let moderationGuildBody;
-    let moderationMetaEl;
-    let moderationEmptyEl;
-    let usersStatusEl;
-    let usersErrorEl;
-    let userTable;
-    let userTableBody;
-    let userDetailEl;
-    let rolesStatusEl;
-    let rolesErrorEl;
-    let roleSummaryEl;
-    let roleTopList;
-    let roleTable;
-    let roleTableBody;
-    let channelsStatusEl;
-    let channelsErrorEl;
-    let channelSummaryEl;
-    let channelTable;
-    let channelTableBody;
-
-    let initializationFailed = false;
-    let initializationError = null;
-
-    try {
-      loginSection = requireElement('login-section');
-      dashboardSection = requireElement('dashboard-section');
-      loginForm = requireElement('login-form');
-      loginUsername = requireElement('login-username');
-      loginPassword = requireElement('login-password');
-      loginErrorEl = requireElement('login-error');
-      sessionMeta = requireElement('session-meta');
-      guildFilterEl = requireElement('guild-filter');
-      userSearchWrapper = requireElement('user-search-wrapper');
-      userSearchEl = requireElement('user-search');
-      refreshBtn = requireElement('refresh-btn');
-      logoutBtn = requireElement('logout-btn');
-      tabBar = requireElement('tab-bar');
-      tabButtons = Array.from(tabBar.querySelectorAll('.tab'));
-      tabPanels = Array.from(document.querySelectorAll('[data-tab-content]'));
-
-      statsStatusEl = requireElement('stats-status');
-      statsErrorEl = requireElement('stats-error');
-      statsSummaryEl = requireElement('stats-summary');
-      insightsGrid = requireElement('insights-grid');
-      guildStatsWrapper = requireElement('guild-stats-wrapper');
-      guildStatsTable = requireElement('guild-stats-table');
-      guildStatsBody = ensureTableBody(guildStatsTable, 'guild-stats-table');
-      moderationSection = requireElement('moderation-section');
-      moderationSummaryEl = requireElement('moderation-summary');
-      moderationListsEl = requireElement('moderation-lists');
-      moderationTimelineCard = requireElement('moderation-timeline');
-      moderationGuildWrapper = requireElement('moderation-guild-wrapper');
-      moderationGuildTable = requireElement('moderation-guild-table');
-      moderationGuildBody = ensureTableBody(moderationGuildTable, 'moderation-guild-table');
-      moderationMetaEl = document.getElementById('moderation-meta');
-      moderationEmptyEl = document.getElementById('moderation-empty');
-
-      usersStatusEl = requireElement('users-status');
-      usersErrorEl = requireElement('users-error');
-      userTable = requireElement('user-table');
-      userTableBody = ensureTableBody(userTable, 'user-table');
-      userDetailEl = requireElement('user-detail');
-
-      rolesStatusEl = requireElement('roles-status');
-      rolesErrorEl = requireElement('roles-error');
-      roleSummaryEl = requireElement('role-summary');
-      roleTopList = requireElement('role-top-list');
-      roleTable = requireElement('role-table');
-      roleTableBody = ensureTableBody(roleTable, 'role-table');
-
-      channelsStatusEl = requireElement('channels-status');
-      channelsErrorEl = requireElement('channels-error');
-      channelSummaryEl = requireElement('channel-summary');
-      channelTable = requireElement('channel-table');
-      channelTableBody = ensureTableBody(channelTable, 'channel-table');
-    } catch (error) {
-      initializationFailed = true;
-      initializationError = error;
-    }
-
-    if (initializationFailed) {
-      const container = dashboardSection ?? document.body;
-      if (container === dashboardSection) {
-        container.innerHTML = '';
-      }
-      const errorBanner = document.createElement('div');
-      errorBanner.className = 'error';
-      errorBanner.textContent = 'Failed to initialize the dashboard. ' + (initializationError?.message || 'Please reload the page.');
-      container.appendChild(errorBanner);
-      console.error(initializationError);
-      return;
-    }
-
-      const CHANNEL_TYPES = {
-      GUILD_TEXT: 0,
-      GUILD_VOICE: 2,
-      GUILD_CATEGORY: 4,
-      GUILD_ANNOUNCEMENT: 5,
-      ANNOUNCEMENT_THREAD: 10,
-      PUBLIC_THREAD: 11,
-      PRIVATE_THREAD: 12,
-      GUILD_STAGE_VOICE: 13,
-      GUILD_DIRECTORY: 14,
-      GUILD_FORUM: 15,
-      GUILD_MEDIA: 16
+    const bindLogout = () => {
+      const btn = $("logout-btn");
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        try {
+          const res = await fetch(AUTH_BASE + "/logout", { method: "POST", credentials: "include" });
+          if (!res.ok) throw new Error("Logout failed ("+res.status+")");
+        } catch {}
+        updateAuthUI(false);
+      });
     };
 
-      const numberFormatter = new Intl.NumberFormat();
-    const compactNumberFormatter = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-    const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
-    const dateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    const relativeFormatter = typeof Intl.RelativeTimeFormat === 'function'
-      ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-      : null;
-    const relativeUnits = [
-      { unit: 'year', seconds: 31536000 },
-      { unit: 'month', seconds: 2592000 },
-      { unit: 'week', seconds: 604800 },
-      { unit: 'day', seconds: 86400 },
-      { unit: 'hour', seconds: 3600 },
-      { unit: 'minute', seconds: 60 },
-      { unit: 'second', seconds: 1 }
-    ];
+    const getGuildId = () => {
+      const el = $("guild-id");
+      return el ? el.value.trim() : "";
+    };
 
-    function getCurrentGuildFilter() {
-      return guildFilterEl.value.trim();
-    }
-
-    function formatNumber(value) {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-      return numberFormatter.format(value);
-    }
-
-    function formatCompact(value) {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-      return compactNumberFormatter.format(value);
-    }
-
-    function formatPercent(part, total) {
-      if (!Number.isFinite(part) || !Number.isFinite(total) || total === 0) return '—';
-      return (part / total * 100).toFixed(1) + '%';
-    }
-
-    function formatCount(value, noun) {
-      if (!Number.isFinite(value)) return '—';
-      const formatted = numberFormatter.format(value);
-      const suffix = value === 1 ? noun : noun + 's';
-      return formatted + ' ' + suffix;
-    }
-
-    function formatSeconds(value) {
-      if (!Number.isFinite(value)) return '—';
-      if (value < 60) return value + 's';
-      if (value % 60 === 0) return (value / 60) + 'm';
-      return (value / 60).toFixed(1) + 'm';
-    }
-
-    function formatDateTime(value) {
-      if (!value) return '—';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '—';
-      return dateTimeFormatter.format(date);
-    }
-
-    function formatDateTimeWithRelative(value) {
-      if (!value) return '—';
-      const base = formatDateTime(value);
-      const relative = computeRelative(value);
-      return relative ? base + ' (' + relative + ')' : base;
-    }
-
-    function computeRelative(value) {
-      if (!relativeFormatter || !value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '';
-      let diffSeconds = Math.round((date.getTime() - Date.now()) / 1000);
-      for (const entry of relativeUnits) {
-        if (Math.abs(diffSeconds) >= entry.seconds || entry.unit === 'second') {
-          const relativeValue = Math.round(diffSeconds / entry.seconds);
-          return relativeFormatter.format(relativeValue, entry.unit);
-        }
-      }
-      return '';
-    }
-
-    function createStatPill(label, value, description) {
-      const pill = document.createElement('div');
-      pill.className = 'stat-pill';
-      const labelEl = document.createElement('span');
-      labelEl.className = 'label';
-      labelEl.textContent = label;
-      pill.appendChild(labelEl);
-      const valueEl = document.createElement('span');
-      valueEl.className = 'value';
-      valueEl.textContent = value;
-      pill.appendChild(valueEl);
-      if (description) {
-        const descEl = document.createElement('span');
-        descEl.className = 'description';
-        descEl.textContent = description;
-        pill.appendChild(descEl);
-      }
-      return pill;
-    }
-
-    function createDefinitionCard(title, entries) {
-      const card = document.createElement('div');
-      card.className = 'stat-card';
-      const heading = document.createElement('h3');
-      heading.textContent = title;
-      card.appendChild(heading);
-      const dl = document.createElement('dl');
-      for (const [label, value] of entries) {
-        const dt = document.createElement('dt');
-        dt.textContent = label;
-        const dd = document.createElement('dd');
-        dd.textContent = value;
-        dl.appendChild(dt);
-        dl.appendChild(dd);
-      }
-      if (!entries.length) {
-        const empty = document.createElement('p');
-        empty.className = 'meta';
-        empty.textContent = 'No data available.';
-        card.appendChild(empty);
-      } else {
-        card.appendChild(dl);
-      }
-      return card;
-    }
-
-    function createListCard(title, items, getValue, options = {}) {
-      const card = document.createElement('div');
-      card.className = 'stat-card';
-      const heading = document.createElement('h3');
-      heading.textContent = title;
-      card.appendChild(heading);
-      if (!items.length) {
-        const empty = document.createElement('p');
-        empty.className = 'meta';
-        empty.textContent = options.emptyText || 'No entries available.';
-        card.appendChild(empty);
-        return card;
-      }
-      const list = document.createElement('ol');
-      for (const item of items) {
-        const li = document.createElement('li');
-        const name = document.createElement('span');
-        name.textContent = item.name || item.id || 'Unknown';
-        const value = document.createElement('span');
-        value.className = 'value';
-        value.textContent = getValue(item);
-        li.appendChild(name);
-        li.appendChild(value);
-        if (options.getTitle) {
-          li.title = options.getTitle(item);
-        }
-        list.appendChild(li);
-      }
-      card.appendChild(list);
-      return card;
-    }
-
-    function createProfileListCard(title, items, options = {}) {
-      const card = document.createElement('div');
-      card.className = 'stat-card';
-      const heading = document.createElement('h3');
-      heading.textContent = title;
-      card.appendChild(heading);
-      if (!items.length) {
-        const empty = document.createElement('p');
-        empty.className = 'meta';
-        empty.textContent = options.emptyText || 'No entries available.';
-        card.appendChild(empty);
-        return card;
-      }
-      const list = document.createElement('ol');
-      list.className = 'profile-list';
-      items.forEach((item) => {
-        const li = document.createElement('li');
-        li.className = 'profile-item';
-        if (options.getTitle) {
-          const titleText = options.getTitle(item);
-          if (titleText) li.title = titleText;
-        }
-        const info = document.createElement('div');
-        info.className = 'profile-info';
-        const name = document.createElement('span');
-        name.className = 'name';
-        name.textContent = options.getName ? options.getName(item) : (item.name || item.id || 'Unknown');
-        info.appendChild(name);
-        if (options.getSubtitle) {
-          const subtitle = options.getSubtitle(item);
-          if (subtitle) {
-            const meta = document.createElement('span');
-            meta.className = 'meta';
-            meta.textContent = subtitle;
-            info.appendChild(meta);
-          }
-        }
-        li.appendChild(info);
-        const value = document.createElement('span');
-        value.className = 'value';
-        value.textContent = options.getValue ? options.getValue(item) : '';
-        li.appendChild(value);
-        list.appendChild(li);
-      });
-      card.appendChild(list);
-      return card;
-    }
-
-    function renderModerationTimeline(timeline) {
-      moderationTimelineCard.innerHTML = '';
-      if (!Array.isArray(timeline) || !timeline.length) {
-        moderationTimelineCard.hidden = true;
-        return;
-      }
-      moderationTimelineCard.hidden = false;
-      const heading = document.createElement('h3');
-      heading.textContent = '14-day moderation timeline';
-      moderationTimelineCard.appendChild(heading);
-      const list = document.createElement('ol');
-      list.className = 'timeline-list';
-      const maxTotal = timeline.reduce((max, entry) => Math.max(max, entry.total ?? 0), 0);
-      timeline.forEach((entry) => {
-        const li = document.createElement('li');
-        li.className = 'timeline-entry';
-        const row = document.createElement('div');
-        row.className = 'timeline-row';
-        const label = document.createElement('span');
-        label.className = 'timeline-label';
-        if (entry.date) {
-          const date = new Date(entry.date + 'T00:00:00Z');
-          label.textContent = Number.isNaN(date.getTime()) ? entry.date : dateFormatter.format(date);
-        } else {
-          label.textContent = 'Unknown';
-        }
-        row.appendChild(label);
-        const bar = document.createElement('div');
-        bar.className = 'timeline-bar';
-        const fill = document.createElement('div');
-        fill.className = 'timeline-bar-fill';
-        let width = 0;
-        if (maxTotal > 0) {
-          width = (entry.total ?? 0) / maxTotal * 100;
-          if (width > 0 && width < 4) width = 4;
-        }
-        fill.style.width = width.toFixed(1) + '%';
-        fill.title = formatNumber(entry.total ?? 0) + ' total actions';
-        bar.appendChild(fill);
-        row.appendChild(bar);
-        const value = document.createElement('span');
-        value.className = 'timeline-value';
-        value.textContent = formatNumber(entry.total ?? 0) + ' total';
-        row.appendChild(value);
-        li.appendChild(row);
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        meta.textContent = formatNumber(entry.warnings ?? 0) + ' warnings • ' + formatNumber(entry.actions ?? 0) + ' actions';
-        li.appendChild(meta);
-        list.appendChild(li);
-      });
-      moderationTimelineCard.appendChild(list);
-    }
-
-    function renderModerationOverview(moderation, guildId) {
-      moderationSummaryEl.innerHTML = '';
-      moderationListsEl.innerHTML = '';
-      moderationGuildBody.innerHTML = '';
-      moderationGuildWrapper.hidden = true;
-      moderationTimelineCard.innerHTML = '';
-      moderationTimelineCard.hidden = true;
-      if (moderationMetaEl) {
-        moderationMetaEl.hidden = true;
-        moderationMetaEl.textContent = '';
-      }
-      if (!moderation) {
-        moderationSection.hidden = true;
-        if (moderationEmptyEl) moderationEmptyEl.hidden = true;
-        return;
-      }
-
-      moderationSection.hidden = false;
-
-      if (moderationMetaEl && moderation.generatedAt) {
-        moderationMetaEl.textContent = 'Generated ' + formatDateTimeWithRelative(moderation.generatedAt);
-        moderationMetaEl.hidden = false;
-      }
-
-      const totals = moderation.totals || {};
-      const summaryItems = [
-        ['Warnings', formatNumber(totals.warnings)],
-        ['Actions', formatNumber(totals.actions)],
-        ['Active penalties', formatNumber(totals.activePunishments)],
-        ['People affected', formatNumber(totals.distinctUsers)],
-        ['Moderators', formatNumber(totals.distinctModerators)],
-        ['Guilds', formatNumber(totals.distinctGuilds)]
-      ];
-      summaryItems.forEach(([label, value]) => {
-        moderationSummaryEl.appendChild(createStatPill(label, value));
-      });
-
-      const recent = moderation.recent || {};
-      const recentEntries = [];
-      if (recent.last24h) {
-        recentEntries.push(['Last 24 hours', formatNumber(recent.last24h.warnings) + ' warnings • ' + formatNumber(recent.last24h.actions) + ' actions']);
-      }
-      if (recent.last7d) {
-        recentEntries.push(['Last 7 days', formatNumber(recent.last7d.warnings) + ' warnings • ' + formatNumber(recent.last7d.actions) + ' actions']);
-      }
-      if (recent.last30d) {
-        recentEntries.push(['Last 30 days', formatNumber(recent.last30d.warnings) + ' warnings • ' + formatNumber(recent.last30d.actions) + ' actions']);
-      }
-      if (recentEntries.length) {
-        moderationListsEl.appendChild(createDefinitionCard('Recent moderation volume', recentEntries));
-      }
-
-      const actionBreakdown = Array.isArray(moderation.actionBreakdown) ? moderation.actionBreakdown.map((entry) => ({
-        name: entry.action || 'unknown',
-        count: entry.count ?? 0,
-        lastActionAt: entry.lastActionAt
-      })) : [];
-      moderationListsEl.appendChild(createListCard('Action breakdown', actionBreakdown, (item) => formatNumber(item.count), {
-        emptyText: 'No moderation actions recorded.',
-        getTitle: (item) => item.lastActionAt ? 'Last action ' + formatDateTimeWithRelative(item.lastActionAt) : ''
-      }));
-
-      const warnedUsers = Array.isArray(moderation.topUsers?.warnings) ? moderation.topUsers.warnings.slice(0, 5) : [];
-      moderationListsEl.appendChild(createProfileListCard('Most warned users', warnedUsers, {
-        emptyText: 'No warnings recorded.',
-        getName: (entry) => describeUser(entry.user) || entry.userId,
-        getSubtitle: (entry) => entry.lastWarningAt ? 'Last warning ' + formatDateTimeWithRelative(entry.lastWarningAt) : '',
-        getValue: (entry) => formatCount(entry.count ?? 0, 'warning'),
-        getTitle: (entry) => Array.isArray(entry.guildIds) && entry.guildIds.length ? 'Guilds: ' + entry.guildIds.join(', ') : ''
-      }));
-
-      const actionedUsers = Array.isArray(moderation.topUsers?.actions) ? moderation.topUsers.actions.slice(0, 5) : [];
-      moderationListsEl.appendChild(createProfileListCard('Most moderated users', actionedUsers, {
-        emptyText: 'No moderation actions recorded.',
-        getName: (entry) => describeUser(entry.user) || entry.userId,
-        getSubtitle: (entry) => entry.lastActionAt ? 'Last action ' + formatDateTimeWithRelative(entry.lastActionAt) : '',
-        getValue: (entry) => formatCount(entry.count ?? 0, 'action'),
-        getTitle: (entry) => Array.isArray(entry.actions) && entry.actions.length ? 'Actions: ' + entry.actions.join(', ') : ''
-      }));
-
-      const actionModerators = Array.isArray(moderation.topModerators?.actions) ? moderation.topModerators.actions.slice(0, 5) : [];
-      moderationListsEl.appendChild(createProfileListCard('Most active moderators', actionModerators, {
-        emptyText: 'No moderator actions recorded.',
-        getName: (entry) => describeUser(entry.user) || entry.moderatorId,
-        getSubtitle: (entry) => entry.lastActionAt ? 'Last action ' + formatDateTimeWithRelative(entry.lastActionAt) : '',
-        getValue: (entry) => formatCount(entry.count ?? 0, 'action'),
-        getTitle: (entry) => Array.isArray(entry.actions) && entry.actions.length ? 'Actions: ' + entry.actions.join(', ') : ''
-      }));
-
-      const warningModerators = Array.isArray(moderation.topModerators?.warnings) ? moderation.topModerators.warnings.slice(0, 5) : [];
-      moderationListsEl.appendChild(createProfileListCard('Top warning moderators', warningModerators, {
-        emptyText: 'No warnings recorded.',
-        getName: (entry) => describeUser(entry.user) || entry.moderatorId,
-        getSubtitle: (entry) => entry.lastWarningAt ? 'Last warning ' + formatDateTimeWithRelative(entry.lastWarningAt) : '',
-        getValue: (entry) => formatCount(entry.count ?? 0, 'warning')
-      }));
-
-      moderationListsEl.hidden = !moderationListsEl.childElementCount;
-
-      renderModerationTimeline(Array.isArray(moderation.timeline) ? moderation.timeline : []);
-
-      const guildEntries = Array.isArray(moderation.guildBreakdown) ? moderation.guildBreakdown.slice(0, 10) : [];
-      if (guildEntries.length) {
-        guildEntries.forEach((entry) => {
-          const tr = document.createElement('tr');
-          const displayGuild = entry.guild || { id: entry.guildId, name: entry.guildId, iconUrl: null };
-          const guildCell = document.createElement('td');
-          guildCell.className = 'guild-cell';
-          if (displayGuild.iconUrl) {
-            const icon = document.createElement('img');
-            icon.className = 'guild-icon';
-            icon.src = displayGuild.iconUrl;
-            icon.alt = displayGuild.name || displayGuild.id;
-            guildCell.appendChild(icon);
-          } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'guild-icon placeholder';
-            placeholder.textContent = displayGuild.name ? displayGuild.name.charAt(0).toUpperCase() : '?';
-            guildCell.appendChild(placeholder);
-          }
-          const name = document.createElement('span');
-          name.textContent = displayGuild.name || entry.guildId;
-          guildCell.appendChild(name);
-          tr.appendChild(guildCell);
-
-          const warningCell = document.createElement('td');
-          warningCell.textContent = formatNumber(entry.warningCount);
-          tr.appendChild(warningCell);
-
-          const actionCell = document.createElement('td');
-          actionCell.textContent = formatNumber(entry.actionCount);
-          tr.appendChild(actionCell);
-
-          const uniqueCell = document.createElement('td');
-          uniqueCell.textContent = formatNumber(entry.uniqueUsers);
-          uniqueCell.title = 'Warnings: ' + formatNumber(entry.warningUserCount) + ' • Actions: ' + formatNumber(entry.actionUserCount);
-          tr.appendChild(uniqueCell);
-
-          const lastCell = document.createElement('td');
-          lastCell.textContent = formatDateTimeWithRelative(entry.lastActivityAt);
-          tr.appendChild(lastCell);
-
-          moderationGuildBody.appendChild(tr);
-        });
-        moderationGuildWrapper.hidden = false;
-      } else {
-        moderationGuildWrapper.hidden = true;
-      }
-
-      const hasVolume = Number.isFinite(totals.warnings) && totals.warnings > 0
-        || Number.isFinite(totals.actions) && totals.actions > 0;
-      if (moderationEmptyEl) {
-        moderationEmptyEl.textContent = guildId ? 'No moderation records for this guild yet.' : 'No moderation records found.';
-        moderationEmptyEl.hidden = hasVolume;
-      }
-    }
-
-    function describeUser(user) {
-      if (!user) return '';
-      const base = user.globalName || user.username || user.id;
-      if (!base) return user.id || '';
-      if (user.discriminator && user.discriminator !== '0') {
-        return base + '#' + user.discriminator;
-      }
-      return base;
-    }
-
-    function makeAvatar(initial) {
-      const span = document.createElement('span');
-      span.className = 'avatar placeholder';
-      span.textContent = initial || '?';
-      return span;
-    }
-
-    function makeChannelIcon(type) {
-      switch (type) {
-        case CHANNEL_TYPES.GUILD_TEXT:
-        case CHANNEL_TYPES.ANNOUNCEMENT_THREAD:
-        case CHANNEL_TYPES.PUBLIC_THREAD:
-        case CHANNEL_TYPES.PRIVATE_THREAD:
-        case CHANNEL_TYPES.GUILD_ANNOUNCEMENT:
-          return '#';
-        case CHANNEL_TYPES.GUILD_VOICE:
-          return '🔊';
-        case CHANNEL_TYPES.GUILD_STAGE_VOICE:
-          return '🎙️';
-        case CHANNEL_TYPES.GUILD_FORUM:
-          return '🗂️';
-        case CHANNEL_TYPES.GUILD_CATEGORY:
-          return '🗃️';
-        case CHANNEL_TYPES.GUILD_DIRECTORY:
-          return '📂';
-        case CHANNEL_TYPES.GUILD_MEDIA:
-          return '🖼️';
-        default:
-          return '•';
-      }
-    }
-
-    function resetRoleView(message) {
-      rolesStatusEl.textContent = message;
-      rolesErrorEl.hidden = true;
-      roleSummaryEl.hidden = true;
-      roleTopList.hidden = true;
-      roleTable.hidden = true;
-      roleTableBody.innerHTML = '';
-    }
-
-    function resetChannelView(message) {
-      channelsStatusEl.textContent = message;
-      channelsErrorEl.hidden = true;
-      channelSummaryEl.hidden = true;
-      channelTable.hidden = true;
-      channelTableBody.innerHTML = '';
-    }
-
-    function updateView() {
-      if (isAuthenticated) {
-        loginSection.hidden = true;
-        dashboardSection.hidden = false;
-        sessionMeta.textContent = currentUser ? 'Signed in as ' + currentUser : 'Signed in';
-        userSearchWrapper.hidden = activeTab !== 'users';
-      } else {
-        loginSection.hidden = false;
-        dashboardSection.hidden = true;
-        sessionMeta.textContent = 'Please sign in to access moderation data.';
-        loginPassword.value = '';
-        setTimeout(() => loginUsername.focus(), 50);
-      }
-    }
-
-    function setActiveTab(name) {
-      activeTab = name;
-      tabButtons.forEach((button) => {
-        button.classList.toggle('active', button.dataset.tab === name);
-      });
-      tabPanels.forEach((panel) => {
-        const isActive = panel.dataset.tabContent === name;
-        panel.hidden = !isActive;
-        panel.classList.toggle('active', isActive);
-      });
-      userSearchWrapper.hidden = name !== 'users';
-      if (name === 'roles') {
-        const guildId = getCurrentGuildFilter();
-        if (guildId) {
-          loadRoles(guildId);
-        } else {
-          resetRoleView('Enter a guild ID to load role insights.');
-        }
-      } else if (name === 'channels') {
-        const guildId = getCurrentGuildFilter();
-        if (guildId) {
-          loadChannels(guildId);
-        } else {
-          resetChannelView('Enter a guild ID to load channel details.');
-        }
-      } else if (name === 'users') {
-        renderUserTable(userSummaries);
-      }
-    }
-
-    async function fetchSession() {
-      statsStatusEl.textContent = 'Checking session…';
+    const refresh = async () => {
+      $("refresh-btn").disabled = true;
       try {
-        const res = await fetch(AUTH_BASE + '/session', { credentials: 'include' });
-        if (!res.ok) throw new Error('Session check failed');
-        const data = await res.json();
-        if (data.authenticated) {
-          setAuthenticated(true, data.username || '');
-        } else if (!isAuthenticated) {
-          setAuthenticated(false, '');
-        }
-      } catch {
-        if (!isAuthenticated) {
-          setAuthenticated(false, '');
-        }
-      }
-    }
-
-    function setAuthenticated(state, username) {
-      const wasAuthenticated = isAuthenticated;
-      isAuthenticated = state;
-      currentUser = username || '';
-      updateView();
-      if (!state) {
-        statsSnapshot = null;
-        userSummaries = [];
-        userDetailCache.clear();
-        roleCache.clear();
-        channelCache.clear();
-        userDetailEl.hidden = true;
-        userDetailEl.classList.remove('active');
-        userDetailEl.innerHTML = '';
-        renderModerationOverview(null);
-      }
-      if (state && !wasAuthenticated) {
-        activeTab = 'overview';
-        setActiveTab(activeTab);
-        refreshAll();
-      }
-    }
-
-    function formatTopActions(topActions) {
-      if (!Array.isArray(topActions) || !topActions.length) return '—';
-      return topActions.map((entry) => (entry.action || 'unknown') + ' (' + entry.count + ')').join(', ');
-    }
-
-    function renderStats(data, guildId) {
-      statsSnapshot = data;
-      statsSummaryEl.innerHTML = '';
-      insightsGrid.innerHTML = '';
-      renderModerationOverview(data && data.moderation ? data.moderation : null, guildId || '');
-
-      const totals = data && data.totals ? data.totals : {};
-      const summaryItems = [
-        ['Guilds', formatNumber(totals.guilds)],
-        ['Members', formatCompact(totals.members)],
-        ['Online', formatCompact(totals.approxPresences)],
-        ['Channels', formatNumber(totals.channels)],
-        ['Roles', formatNumber(totals.roles)],
-        ['Boosts', formatNumber(totals.boosts)]
-      ];
-      let hasSummary = false;
-      for (const [label, value] of summaryItems) {
-        if (value !== '—') hasSummary = true;
-        statsSummaryEl.appendChild(createStatPill(label, value));
-      }
-      statsSummaryEl.hidden = !hasSummary;
-
-      const insights = data && data.insights ? data.insights : {};
-      const insightCards = [];
-      if (insights.averages) {
-        const averages = insights.averages;
-        const entries = [
-          ['Members per guild', formatNumber(averages.membersPerGuild)],
-          ['Online per guild', formatNumber(averages.onlineUsersPerGuild)],
-          ['Boosts per guild', formatNumber(averages.boostsPerGuild)],
-          ['Channels per guild', formatNumber(averages.channelsPerGuild)],
-          ['Roles per guild', formatNumber(averages.rolesPerGuild)],
-          ['Emoji per guild', formatNumber(averages.emojisPerGuild)],
-          ['Stickers per guild', formatNumber(averages.stickersPerGuild)]
-        ].filter(([, value]) => value !== '—');
-        insightCards.push(createDefinitionCard('Averages', entries));
-      }
-      if (insights.ratios) {
-        const ratios = insights.ratios;
-        const entries = [
-          ['Text / Voice', ratios.textToVoiceRatio ? ratios.textToVoiceRatio.toFixed(2) : '—'],
-          ['Threads per text', ratios.threadsPerTextChannel ? ratios.threadsPerTextChannel.toFixed(2) : '—'],
-          ['Average online ratio', ratios.averageOnlineRatio ? (ratios.averageOnlineRatio * 100).toFixed(1) + '%' : '—']
-        ];
-        insightCards.push(createDefinitionCard('Ratios', entries));
-      }
-      if (insights.topGuilds) {
-        if (Array.isArray(insights.topGuilds.byMembers)) {
-          insightCards.push(createListCard('Top guilds by members', insights.topGuilds.byMembers, (item) => formatNumber(item.memberCount || 0)));
-        }
-        if (Array.isArray(insights.topGuilds.byOnline)) {
-          insightCards.push(createListCard('Most active guilds', insights.topGuilds.byOnline, (item) => formatNumber(item.approxPresenceCount || 0)));
-        }
-        if (Array.isArray(insights.topGuilds.byBoosts)) {
-          insightCards.push(createListCard('Most boosted guilds', insights.topGuilds.byBoosts, (item) => formatNumber(item.boostCount || 0)));
-        }
-      }
-      if (insights.distribution) {
-        const memberDistribution = insights.distribution.memberCount || {};
-        const presenceDistribution = insights.distribution.presenceCount || {};
-        insightCards.push(createDefinitionCard('Member distribution', [
-          ['Average', formatNumber(memberDistribution.average)],
-          ['Median', formatNumber(memberDistribution.median)],
-          ['Max', formatNumber(memberDistribution.max)],
-          ['Min', formatNumber(memberDistribution.min)]
-        ]));
-        insightCards.push(createDefinitionCard('Online distribution', [
-          ['Average', formatNumber(presenceDistribution.average)],
-          ['Median', formatNumber(presenceDistribution.median)],
-          ['Max', formatNumber(presenceDistribution.max)],
-          ['Min', formatNumber(presenceDistribution.min)]
-        ]));
-      }
-      if (insightCards.length) {
-        insightCards.forEach((card) => insightsGrid.appendChild(card));
-        insightsGrid.hidden = false;
-      } else {
-        insightsGrid.hidden = true;
-      }
-
-      guildStatsBody.innerHTML = '';
-      const guilds = Array.isArray(data.guilds) ? data.guilds : [];
-      if (guilds.length) {
-        guilds.forEach((guild) => {
-          const tr = document.createElement('tr');
-
-          const guildCell = document.createElement('td');
-          guildCell.className = 'guild-cell';
-          if (guild.iconUrl) {
-            const icon = document.createElement('img');
-            icon.className = 'guild-icon';
-            icon.src = guild.iconUrl;
-            icon.alt = guild.name || guild.id;
-            guildCell.appendChild(icon);
-          } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'guild-icon placeholder';
-            placeholder.textContent = guild.name ? guild.name.charAt(0).toUpperCase() : '?';
-            guildCell.appendChild(placeholder);
-          }
-          const nameEl = document.createElement('span');
-          nameEl.textContent = guild.name || guild.id;
-          guildCell.appendChild(nameEl);
-          tr.appendChild(guildCell);
-
-          const membersCell = document.createElement('td');
-          membersCell.textContent = formatNumber(guild.memberCount);
-          tr.appendChild(membersCell);
-
-          const onlineCell = document.createElement('td');
-          onlineCell.textContent = formatNumber(guild.approxPresenceCount);
-          tr.appendChild(onlineCell);
-
-          const ratioCell = document.createElement('td');
-          ratioCell.textContent = formatPercent(guild.approxPresenceCount, guild.memberCount);
-          tr.appendChild(ratioCell);
-
-          const channelCell = document.createElement('td');
-          channelCell.textContent = formatNumber(guild.channelCounts ? guild.channelCounts.total : null);
-          if (guild.channelCounts) {
-            const breakdown = [
-              ['Text', guild.channelCounts.text],
-              ['Voice', guild.channelCounts.voice],
-              ['Stage', guild.channelCounts.stage],
-              ['Forum', guild.channelCounts.forum],
-              ['Announcement', guild.channelCounts.announcement],
-              ['Thread', guild.channelCounts.thread],
-              ['Category', guild.channelCounts.category]
-            ].map(([label, value]) => label + ': ' + formatNumber(value)).join('
-');
-            channelCell.title = breakdown;
-          }
-          tr.appendChild(channelCell);
-
-          const roleCell = document.createElement('td');
-          roleCell.textContent = formatNumber(guild.roleCount);
-          tr.appendChild(roleCell);
-
-          const boostCell = document.createElement('td');
-          boostCell.textContent = formatNumber(guild.boostCount);
-          if (guild.boostLevel) {
-            boostCell.title = 'Tier ' + guild.boostLevel;
-          }
-          tr.appendChild(boostCell);
-
-          guildStatsBody.appendChild(tr);
-        });
-        guildStatsWrapper.hidden = false;
-        statsStatusEl.textContent = (data.generatedAt ? 'Last updated ' + formatDateTime(data.generatedAt) : 'Last updated just now') + (guildId ? ' — Filter: ' + guildId : '');
-      } else {
-        guildStatsWrapper.hidden = true;
-        statsStatusEl.textContent = guildId ? 'No guilds available for the current filter.' : 'No guild data available.';
-      }
-    }
-
-    function renderUserTable(users) {
-      userTableBody.innerHTML = '';
-      userDetailEl.hidden = true;
-      userDetailEl.classList.remove('active');
-      userDetailEl.innerHTML = '';
-      if (!Array.isArray(users) || !users.length) {
-        userTable.hidden = true;
-        usersStatusEl.textContent = 'No users found.';
-        return;
-      }
-      const query = (userSearchEl.value || '').trim().toLowerCase();
-      const filtered = !query ? users : users.filter((user) => {
-        const fields = [
-          user.userId,
-          user.user?.username,
-          user.user?.globalName,
-          user.user?.tag
-        ].filter(Boolean).map((value) => value.toLowerCase());
-        return fields.some((field) => field.includes(query));
-      });
-
-      filtered.forEach((user) => {
-        const tr = document.createElement('tr');
-        tr.dataset.userId = user.userId;
-
-        const userCell = document.createElement('td');
-        userCell.className = 'user-cell';
-        const displayUser = user.user;
-        if (displayUser && displayUser.avatarUrl) {
-          const avatar = document.createElement('img');
-          avatar.className = 'avatar';
-          avatar.src = displayUser.avatarUrl;
-          avatar.alt = displayUser.username || displayUser.id;
-          userCell.appendChild(avatar);
-        } else {
-          userCell.appendChild(makeAvatar(displayUser && displayUser.username ? displayUser.username.charAt(0).toUpperCase() : '?'));
-        }
-        const meta = document.createElement('div');
-        meta.className = 'user-meta';
-        const name = document.createElement('span');
-        name.textContent = describeUser(displayUser) || user.userId;
-        meta.appendChild(name);
-        const tag = document.createElement('span');
-        tag.className = 'tag';
-        tag.textContent = displayUser && displayUser.tag ? displayUser.tag : user.userId;
-        meta.appendChild(tag);
-        userCell.appendChild(meta);
-        tr.appendChild(userCell);
-
-        const warningCell = document.createElement('td');
-        warningCell.textContent = formatNumber(user.warningCount);
-        tr.appendChild(warningCell);
-
-        const actionCell = document.createElement('td');
-        actionCell.textContent = formatNumber(user.totalActions);
-        tr.appendChild(actionCell);
-
-        const topActionCell = document.createElement('td');
-        topActionCell.textContent = formatTopActions(user.topActions);
-        tr.appendChild(topActionCell);
-
-        const lastActivityCell = document.createElement('td');
-        lastActivityCell.textContent = formatDateTimeWithRelative(user.lastActivityAt);
-        tr.appendChild(lastActivityCell);
-
-        const moderatorCell = document.createElement('td');
-        moderatorCell.textContent = formatNumber(user.moderatorCount);
-        moderatorCell.title = (user.moderatorIds || []).join(', ');
-        tr.appendChild(moderatorCell);
-
-        const guildCell = document.createElement('td');
-        guildCell.textContent = formatNumber(user.guildCount);
-        guildCell.title = (user.guildIds || []).join(', ');
-        tr.appendChild(guildCell);
-
-        userTableBody.appendChild(tr);
-      });
-
-      userTable.hidden = !filtered.length;
-      if (filtered.length) {
-        usersStatusEl.textContent = 'Showing ' + filtered.length + ' of ' + users.length + ' users.';
-      } else {
-        usersStatusEl.textContent = 'No users match the current filter.';
-      }
-    }
-
-    function renderUserDetail(detail) {
-      if (!detail) {
-        userDetailEl.hidden = true;
-        userDetailEl.classList.remove('active');
-        userDetailEl.innerHTML = '';
-        return;
-      }
-
-      userDetailEl.hidden = false;
-      userDetailEl.classList.add('active');
-      userDetailEl.innerHTML = '';
-
-      const header = document.createElement('div');
-      header.className = 'detail-header';
-      const heading = document.createElement('h3');
-      heading.textContent = describeUser(detail.user) || detail.userId;
-      header.appendChild(heading);
-      const closeBtn = document.createElement('button');
-      closeBtn.type = 'button';
-      closeBtn.className = 'ghost-btn';
-      closeBtn.textContent = 'Close';
-      closeBtn.addEventListener('click', () => {
-        userDetailEl.hidden = true;
-        userDetailEl.classList.remove('active');
-        userDetailEl.innerHTML = '';
-        userTableBody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
-      });
-      header.appendChild(closeBtn);
-      userDetailEl.appendChild(header);
-
-      const metricsGrid = document.createElement('div');
-      metricsGrid.className = 'metrics-grid';
-      const metrics = [
-        ['Warnings', formatNumber(detail.warningCount)],
-        ['Actions', formatNumber(detail.actionCount)],
-        ['Guilds', formatNumber(detail.guildCount)],
-        ['Last activity', formatDateTimeWithRelative(detail.lastActivityAt)]
-      ];
-      metrics.forEach(([label, value]) => {
-        const metric = document.createElement('div');
-        metric.className = 'metric';
-        const labelEl = document.createElement('span');
-        labelEl.className = 'label';
-        labelEl.textContent = label;
-        const valueEl = document.createElement('span');
-        valueEl.className = 'value';
-        valueEl.textContent = value;
-        metric.appendChild(labelEl);
-        metric.appendChild(valueEl);
-        metricsGrid.appendChild(metric);
-      });
-      userDetailEl.appendChild(metricsGrid);
-
-      if (Array.isArray(detail.moderators) && detail.moderators.length) {
-        const moderatorsLabel = document.createElement('div');
-        moderatorsLabel.className = 'meta';
-        moderatorsLabel.textContent = 'Moderators who interacted with this user';
-        userDetailEl.appendChild(moderatorsLabel);
-
-        const chipGroup = document.createElement('div');
-        chipGroup.className = 'chip-group';
-        detail.moderators.forEach((moderator) => {
-          const chip = document.createElement('span');
-          chip.className = 'chip';
-          chip.textContent = describeUser(moderator.user) || moderator.id;
-          chipGroup.appendChild(chip);
-        });
-        userDetailEl.appendChild(chipGroup);
-      }
-
-      const detailSections = document.createElement('div');
-      detailSections.className = 'detail-sections';
-
-      const guildSection = document.createElement('div');
-      const guildHeading = document.createElement('h4');
-      guildHeading.textContent = 'Guild breakdown';
-      guildSection.appendChild(guildHeading);
-      if (detail.guildBreakdown && detail.guildBreakdown.length) {
-        const table = document.createElement('table');
-        table.className = 'compact-table';
-        const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>Guild ID</th><th>Warnings</th><th>Actions</th><th>Last activity</th></tr>';
-        table.appendChild(thead);
-        const tbody = document.createElement('tbody');
-        detail.guildBreakdown.slice(0, 15).forEach((entry) => {
-          const row = document.createElement('tr');
-          const idCell = document.createElement('td');
-          idCell.textContent = entry.guildId;
-          row.appendChild(idCell);
-          const warnCell = document.createElement('td');
-          warnCell.textContent = formatNumber(entry.warningCount);
-          row.appendChild(warnCell);
-          const actionCell = document.createElement('td');
-          actionCell.textContent = formatNumber(entry.actionCount);
-          row.appendChild(actionCell);
-          const activityCell = document.createElement('td');
-          activityCell.textContent = formatDateTimeWithRelative(entry.lastActivityAt);
-          row.appendChild(activityCell);
-          tbody.appendChild(row);
-        });
-        table.appendChild(tbody);
-        guildSection.appendChild(table);
-      } else {
-        const empty = document.createElement('p');
-        empty.className = 'empty-state';
-        empty.textContent = 'No guild-specific activity recorded.';
-        guildSection.appendChild(empty);
-      }
-      detailSections.appendChild(guildSection);
-
-      const warningSection = document.createElement('div');
-      const warningHeading = document.createElement('h4');
-      warningHeading.textContent = 'Recent warnings';
-      warningSection.appendChild(warningHeading);
-      if (detail.warnings && detail.warnings.length) {
-        const table = document.createElement('table');
-        table.className = 'compact-table';
-        const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>When</th><th>Moderator</th><th>Reason</th></tr>';
-        table.appendChild(thead);
-        const tbody = document.createElement('tbody');
-        detail.warnings.slice(0, 10).forEach((warning) => {
-          const row = document.createElement('tr');
-          const timeCell = document.createElement('td');
-          timeCell.textContent = formatDateTimeWithRelative(warning.createdAt);
-          row.appendChild(timeCell);
-          const modCell = document.createElement('td');
-          modCell.textContent = describeUser(warning.moderator) || warning.modId || '—';
-          row.appendChild(modCell);
-          const reasonCell = document.createElement('td');
-          reasonCell.textContent = warning.reason || '—';
-          row.appendChild(reasonCell);
-          tbody.appendChild(row);
-        });
-        table.appendChild(tbody);
-        warningSection.appendChild(table);
-      } else {
-        const empty = document.createElement('p');
-        empty.className = 'empty-state';
-        empty.textContent = 'No warnings found for this user.';
-        warningSection.appendChild(empty);
-      }
-      detailSections.appendChild(warningSection);
-
-      const actionSection = document.createElement('div');
-      const actionHeading = document.createElement('h4');
-      actionHeading.textContent = 'Recent actions';
-      actionSection.appendChild(actionHeading);
-      if (detail.actions && detail.actions.length) {
-        const table = document.createElement('table');
-        table.className = 'compact-table';
-        const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>When</th><th>Action</th><th>Moderator</th><th>Reason</th></tr>';
-        table.appendChild(thead);
-        const tbody = document.createElement('tbody');
-        detail.actions.slice(0, 10).forEach((action) => {
-          const row = document.createElement('tr');
-          const timeCell = document.createElement('td');
-          timeCell.textContent = formatDateTimeWithRelative(action.createdAt);
-          row.appendChild(timeCell);
-          const actionCell = document.createElement('td');
-          actionCell.textContent = action.action || '—';
-          row.appendChild(actionCell);
-          const modCell = document.createElement('td');
-          modCell.textContent = describeUser(action.moderator) || action.moderatorId || '—';
-          row.appendChild(modCell);
-          const reasonCell = document.createElement('td');
-          reasonCell.textContent = action.reason || '—';
-          row.appendChild(reasonCell);
-          tbody.appendChild(row);
-        });
-        table.appendChild(tbody);
-        actionSection.appendChild(table);
-      } else {
-        const empty = document.createElement('p');
-        empty.className = 'empty-state';
-        empty.textContent = 'No moderation actions found for this user.';
-        actionSection.appendChild(empty);
-      }
-      detailSections.appendChild(actionSection);
-
-      userDetailEl.appendChild(detailSections);
-
-      if (detail.actionSummary && detail.actionSummary.length) {
-        userDetailEl.appendChild(createDefinitionCard('Action summary', detail.actionSummary.map((entry) => [entry.action || 'unknown', formatNumber(entry.count)])));
-      }
-      if (detail.warningSummary && detail.warningSummary.length) {
-        userDetailEl.appendChild(createDefinitionCard('Top warning reasons', detail.warningSummary.map((entry) => [entry.reason || '—', formatNumber(entry.count)])));
-      }
-    }
-
-    function renderRoleSummary(data) {
-      if (!data) {
-        resetRoleView('No role data available.');
-        return;
-      }
-      const summary = data.summary || {};
-      roleSummaryEl.innerHTML = '';
-      roleTopList.innerHTML = '';
-
-      const totalPills = [
-        ['Roles', formatNumber(summary.totals ? summary.totals.totalRoles : null)],
-        ['Assignable', formatNumber(summary.totals ? summary.totals.assignableRoles : null)],
-        ['Managed', formatNumber(summary.totals ? summary.totals.managedRoles : null)],
-        ['Hoisted', formatNumber(summary.totals ? summary.totals.hoistedRoles : null)],
-        ['Mentionable', formatNumber(summary.totals ? summary.totals.mentionableRoles : null)],
-        ['With color', formatNumber(summary.totals ? summary.totals.rolesWithColor : null)]
-      ];
-      totalPills.forEach(([label, value]) => roleSummaryEl.appendChild(createStatPill(label, value)));
-      roleSummaryEl.hidden = false;
-
-      const memberCounts = summary.memberCounts || {};
-      roleTopList.appendChild(createDefinitionCard('Member distribution', [
-        ['Known', formatNumber(memberCounts.known)],
-        ['Unknown', formatNumber(memberCounts.unknown)],
-        ['Average', formatNumber(memberCounts.average)],
-        ['Median', formatNumber(memberCounts.median)],
-        ['Max', formatNumber(memberCounts.max)],
-        ['Min', formatNumber(memberCounts.min)]
-      ]));
-
-      const permissionUsage = summary.permissionUsage || [];
-      roleTopList.appendChild(createListCard('Most used permissions', permissionUsage, (entry) => formatNumber(entry.count), { emptyText: 'No permission data available.' }));
-
-      const topRoles = summary.topRoles || [];
-      roleTopList.appendChild(createListCard('Most assigned roles', topRoles, (entry) => formatNumber(entry.memberCount || 0), {
-        getTitle: (entry) => 'Humans: ' + formatNumber(entry.humanCount) + '
-Bots: ' + formatNumber(entry.botCount)
-      }));
-      roleTopList.hidden = false;
-
-      roleTableBody.innerHTML = '';
-      (data.roles || []).forEach((role) => {
-        const tr = document.createElement('tr');
-
-        const nameCell = document.createElement('td');
-        const wrapper = document.createElement('div');
-        wrapper.style.display = 'flex';
-        wrapper.style.alignItems = 'center';
-        wrapper.style.gap = '0.65rem';
-
-        const swatch = document.createElement('span');
-        swatch.className = 'color-swatch';
-        swatch.style.background = role.color && role.color !== '#000000' ? role.color : '#1e293b';
-        wrapper.appendChild(swatch);
-
-        const name = document.createElement('span');
-        name.textContent = role.name || role.id;
-        wrapper.appendChild(name);
-        nameCell.appendChild(wrapper);
-        tr.appendChild(nameCell);
-
-        const memberCell = document.createElement('td');
-        memberCell.textContent = formatNumber(role.memberCount);
-        tr.appendChild(memberCell);
-
-        const botCell = document.createElement('td');
-        botCell.textContent = formatNumber(role.botCount);
-        tr.appendChild(botCell);
-
-        const humanCell = document.createElement('td');
-        humanCell.textContent = formatNumber(role.humanCount);
-        tr.appendChild(humanCell);
-
-        const permCell = document.createElement('td');
-        permCell.textContent = role.permissionsCount ? role.permissionsCount + ' perms' : '0';
-        if (role.permissions && role.permissions.length) {
-          permCell.title = role.permissions.join(', ');
-        }
-        tr.appendChild(permCell);
-
-        const flagCell = document.createElement('td');
-        const flags = [];
-        if (role.isEveryone) flags.push('Default');
-        if (role.managed) flags.push('Managed');
-        if (role.hoist) flags.push('Hoisted');
-        if (role.mentionable) flags.push('Mentionable');
-        if (role.tags?.premiumSubscriberRole) flags.push('Booster');
-        if (role.tags?.availableForPurchase) flags.push('Purchasable');
-        if (role.tags?.guildConnections) flags.push('Connections');
-        flagCell.textContent = flags.length ? flags.join(', ') : '—';
-        tr.appendChild(flagCell);
-
-        const createdCell = document.createElement('td');
-        createdCell.textContent = formatDateTime(role.createdAt);
-        tr.appendChild(createdCell);
-
-        roleTableBody.appendChild(tr);
-      });
-      roleTable.hidden = !(data.roles && data.roles.length);
-      rolesStatusEl.textContent = 'Loaded ' + (data.roles ? data.roles.length : 0) + ' roles' + (data.generatedAt ? ' • Updated ' + formatDateTime(data.generatedAt) : '');
-    }
-
-    function renderChannelSummary(data) {
-      if (!data) {
-        resetChannelView('No channel data available.');
-        return;
-      }
-      channelSummaryEl.innerHTML = '';
-      const totals = data.summary ? data.summary.totals : null;
-      if (totals) {
-        const pills = [
-          ['Total channels', formatNumber(totals.total)],
-          ['Text', formatNumber(totals.text)],
-          ['Voice', formatNumber(totals.voice)],
-          ['Stage', formatNumber(totals.stage)],
-          ['Threads', formatNumber(totals.thread)],
-          ['Categories', formatNumber(totals.category)],
-          ['Forum', formatNumber(totals.forum)],
-          ['Announcements', formatNumber(totals.announcement)]
-        ];
-        pills.forEach(([label, value]) => channelSummaryEl.appendChild(createStatPill(label, value)));
-      }
-      if (data.summary) {
-        const voiceSummary = data.summary.voice || {};
-        channelSummaryEl.appendChild(createStatPill('Voice capacity', voiceSummary.capacity ? formatNumber(voiceSummary.capacity) : 'Unlimited', voiceSummary.unlimitedChannels ? voiceSummary.unlimitedChannels + ' unlimited channels' : null));
-        channelSummaryEl.appendChild(createStatPill('Active voice users', formatNumber(voiceSummary.activeUsers)));
-        channelSummaryEl.appendChild(createStatPill('NSFW channels', formatNumber(data.summary.nsfwChannels)));
-        channelSummaryEl.appendChild(createStatPill('Slowmode channels', formatNumber(data.summary.slowmodeEnabled)));
-        const threadSummary = data.summary.threads || {};
-        channelSummaryEl.appendChild(createStatPill('Active threads', formatNumber(threadSummary.active)));
-        channelSummaryEl.appendChild(createStatPill('Archived threads', formatNumber(threadSummary.archived)));
-      }
-      channelSummaryEl.hidden = false;
-
-      channelTableBody.innerHTML = '';
-      (data.channels || []).forEach((channel) => {
-        const tr = document.createElement('tr');
-
-        const channelCell = document.createElement('td');
-        const label = document.createElement('div');
-        label.style.display = 'flex';
-        label.style.alignItems = 'center';
-        label.style.gap = '0.5rem';
-        const icon = document.createElement('span');
-        icon.className = 'channel-icon';
-        icon.textContent = makeChannelIcon(channel.type);
-        label.appendChild(icon);
-        const name = document.createElement('span');
-        name.textContent = channel.name || channel.id;
-        label.appendChild(name);
-        channelCell.appendChild(label);
-        tr.appendChild(channelCell);
-
-        const typeCell = document.createElement('td');
-        typeCell.textContent = channel.typeLabel || '—';
-        tr.appendChild(typeCell);
-
-        const parentCell = document.createElement('td');
-        parentCell.textContent = channel.parentName || channel.parentId || '—';
-        tr.appendChild(parentCell);
-
-        const memberCell = document.createElement('td');
-        memberCell.textContent = formatNumber(channel.memberCount);
-        if (Number.isFinite(channel.botCount)) {
-          memberCell.title = 'Bots: ' + channel.botCount;
-        }
-        tr.appendChild(memberCell);
-
-        const rateCell = document.createElement('td');
-        const parts = [];
-        if (Number.isFinite(channel.rateLimitPerUser)) {
-          parts.push('Slowmode ' + formatSeconds(channel.rateLimitPerUser));
-        }
-        if (Number.isFinite(channel.bitrate)) {
-          parts.push((channel.bitrate / 1000).toFixed(0) + ' kbps');
-        }
-        if (Number.isFinite(channel.userLimit)) {
-          parts.push('Limit ' + channel.userLimit);
-        } else if (channel.type === CHANNEL_TYPES.GUILD_VOICE || channel.type === CHANNEL_TYPES.GUILD_STAGE_VOICE) {
-          parts.push('No user limit');
-        }
-        rateCell.textContent = parts.length ? parts.join(' • ') : '—';
-        tr.appendChild(rateCell);
-
-        const flagCell = document.createElement('td');
-        const flagList = [];
-        if (channel.nsfw) flagList.push('NSFW');
-        if (channel.archived) flagList.push('Archived');
-        if (channel.locked) flagList.push('Locked');
-        if (channel.invitable === false) flagList.push('Closed');
-        if (channel.isTextBased) flagList.push('Text');
-        if (channel.childCount) flagList.push(channel.childCount + ' children');
-        flagCell.textContent = flagList.length ? flagList.join(', ') : '—';
-        tr.appendChild(flagCell);
-
-        const createdCell = document.createElement('td');
-        createdCell.textContent = formatDateTime(channel.createdAt);
-        tr.appendChild(createdCell);
-
-        const activityCell = document.createElement('td');
-        activityCell.textContent = formatDateTimeWithRelative(channel.lastActivityAt);
-        tr.appendChild(activityCell);
-
-        channelTableBody.appendChild(tr);
-      });
-      channelTable.hidden = !(data.channels && data.channels.length);
-      channelsStatusEl.textContent = 'Loaded ' + (data.channels ? data.channels.length : 0) + ' channels' + (data.generatedAt ? ' • Updated ' + formatDateTime(data.generatedAt) : '');
-    }
-
-    async function loadStats(guildId) {
-      statsErrorEl.hidden = true;
-      try {
-        const query = guildId ? '?guildId=' + encodeURIComponent(guildId) : '';
-        const res = await fetch(API_BASE + '/stats' + query, { credentials: 'include' });
-        if (res.status === 401 || res.status === 403) {
-          setAuthenticated(false, '');
-          throw new Error('Authentication required');
-        }
-        if (!res.ok) {
-          throw new Error('Failed to load server stats (' + res.status + ')');
-        }
-        const data = await res.json();
-        renderStats(data, guildId);
-      } catch (error) {
-        statsErrorEl.textContent = error.message || 'Unknown error';
-        statsErrorEl.hidden = false;
-        if (!statsSnapshot) {
-          statsStatusEl.textContent = 'Unable to load server statistics.';
-          statsSummaryEl.hidden = true;
-          insightsGrid.hidden = true;
-          guildStatsWrapper.hidden = true;
-          renderModerationOverview(null);
-        }
-      }
-    }
-
-    async function loadUsers(guildId) {
-      usersErrorEl.hidden = true;
-      try {
-        const query = guildId ? '?guildId=' + encodeURIComponent(guildId) : '';
-        const res = await fetch(API_BASE + '/users' + query, { credentials: 'include' });
-        if (res.status === 401 || res.status === 403) {
-          setAuthenticated(false, '');
-          throw new Error('Authentication required');
-        }
-        if (!res.ok) {
-          throw new Error('Failed to load user summaries (' + res.status + ')');
-        }
-        const data = await res.json();
-        userSummaries = Array.isArray(data.users) ? data.users : [];
-        renderUserTable(userSummaries);
-        usersStatusEl.textContent = userSummaries.length ? 'Loaded ' + userSummaries.length + ' users.' : 'No users found.';
-      } catch (error) {
-        usersErrorEl.textContent = error.message || 'Unknown error';
-        usersErrorEl.hidden = false;
-        if (!userSummaries.length) {
-          usersStatusEl.textContent = 'Unable to load users.';
-          userTable.hidden = true;
-        }
-      }
-    }
-
-    async function loadUserDetail(userId, guildId) {
-      const cacheKey = guildId ? userId + ':' + guildId : userId;
-      if (userDetailCache.has(cacheKey)) {
-        renderUserDetail(userDetailCache.get(cacheKey));
-        return;
-      }
-      userDetailEl.hidden = false;
-      userDetailEl.classList.add('active');
-      userDetailEl.innerHTML = '<p class="meta">Loading user details…</p>';
-      try {
-        const query = guildId ? '?guildId=' + encodeURIComponent(guildId) : '';
-        const res = await fetch(API_BASE + '/users/' + encodeURIComponent(userId) + query, { credentials: 'include' });
-        if (res.status === 404) {
-          userDetailEl.innerHTML = '<p class="error">No details found for this user.</p>';
-          return;
-        }
-        if (res.status === 401 || res.status === 403) {
-          setAuthenticated(false, '');
-          throw new Error('Authentication required');
-        }
-        if (!res.ok) {
-          throw new Error('Failed to load user details (' + res.status + ')');
-        }
-        const data = await res.json();
-        userDetailCache.set(cacheKey, data);
-        renderUserDetail(data);
-      } catch (error) {
-        userDetailEl.innerHTML = '<p class="error">' + (error.message || 'Unknown error') + '</p>';
-      }
-    }
-
-    async function loadRoles(guildId) {
-      if (!guildId) {
-        resetRoleView('Enter a guild ID to load role insights.');
-        return;
-      }
-      rolesErrorEl.hidden = true;
-      if (roleCache.has(guildId)) {
-        renderRoleSummary(roleCache.get(guildId));
-      } else {
-        rolesStatusEl.textContent = 'Loading role insights…';
-      }
-      try {
-        const res = await fetch(API_BASE + '/guilds/' + encodeURIComponent(guildId) + '/roles', { credentials: 'include' });
-        if (res.status === 404) {
-          resetRoleView('Guild not found or inaccessible.');
-          return;
-        }
-        if (res.status === 401 || res.status === 403) {
-          setAuthenticated(false, '');
-          throw new Error('Authentication required');
-        }
-        if (!res.ok) {
-          throw new Error('Failed to load role insights (' + res.status + ')');
-        }
-        const data = await res.json();
-        roleCache.set(guildId, data);
-        renderRoleSummary(data);
-      } catch (error) {
-        rolesErrorEl.textContent = error.message || 'Unknown error';
-        rolesErrorEl.hidden = false;
-      }
-    }
-
-    async function loadChannels(guildId) {
-      if (!guildId) {
-        resetChannelView('Enter a guild ID to load channel details.');
-        return;
-      }
-      channelsErrorEl.hidden = true;
-      if (channelCache.has(guildId)) {
-        renderChannelSummary(channelCache.get(guildId));
-      } else {
-        channelsStatusEl.textContent = 'Loading channel details…';
-      }
-      try {
-        const res = await fetch(API_BASE + '/guilds/' + encodeURIComponent(guildId) + '/channels', { credentials: 'include' });
-        if (res.status === 404) {
-          resetChannelView('Guild not found or inaccessible.');
-          return;
-        }
-        if (res.status === 401 || res.status === 403) {
-          setAuthenticated(false, '');
-          throw new Error('Authentication required');
-        }
-        if (!res.ok) {
-          throw new Error('Failed to load channel details (' + res.status + ')');
-        }
-        const data = await res.json();
-        channelCache.set(guildId, data);
-        renderChannelSummary(data);
-      } catch (error) {
-        channelsErrorEl.textContent = error.message || 'Unknown error';
-        channelsErrorEl.hidden = false;
-      }
-    }
-
-    async function refreshAll() {
-      if (!isAuthenticated) return;
-      refreshBtn.disabled = true;
-      try {
-        const guildId = getCurrentGuildFilter();
-        currentGuildFilter = guildId;
-        await Promise.all([loadStats(guildId), loadUsers(guildId)]);
-        if (guildId) {
-          if (activeTab === 'roles') {
-            await loadRoles(guildId);
-          } else if (roleCache.has(guildId)) {
-            renderRoleSummary(roleCache.get(guildId));
-          } else {
-            rolesStatusEl.textContent = 'Select the Roles tab to load insights.';
-          }
-          if (activeTab === 'channels') {
-            await loadChannels(guildId);
-          } else if (channelCache.has(guildId)) {
-            renderChannelSummary(channelCache.get(guildId));
-          } else {
-            channelsStatusEl.textContent = 'Select the Channels tab to load details.';
-          }
-        } else {
-          resetRoleView('Enter a guild ID to load role insights.');
-          resetChannelView('Enter a guild ID to load channel details.');
-        }
+        await Promise.all([loadStats(getGuildId()), loadUsers(getGuildId())]);
       } finally {
-        refreshBtn.disabled = false;
+        $("refresh-btn").disabled = false;
       }
-    }
+    };
 
-    tabButtons.forEach((button) => {
-      button.addEventListener('click', () => {
-        if (!isAuthenticated) return;
-        const tab = button.dataset.tab;
-        if (tab) setActiveTab(tab);
-      });
-    });
-
-    guildFilterEl.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        refreshAll();
-      }
-    });
-
-    guildFilterEl.addEventListener('input', () => {
-      const guildId = getCurrentGuildFilter();
-      if (!guildId) {
-        resetRoleView('Enter a guild ID to load role insights.');
-        resetChannelView('Enter a guild ID to load channel details.');
-      } else {
-        if (activeTab !== 'roles') {
-          rolesStatusEl.textContent = 'Press Refresh to load role insights for ' + guildId + '.';
-        }
-        if (activeTab !== 'channels') {
-          channelsStatusEl.textContent = 'Press Refresh to load channel details for ' + guildId + '.';
-        }
-      }
-    });
-
-    userSearchEl.addEventListener('input', () => {
-      renderUserTable(userSummaries);
-    });
-
-    userTableBody.addEventListener('click', (event) => {
-      const row = event.target.closest('tr[data-user-id]');
-      if (!row) return;
-      userTableBody.querySelectorAll('tr').forEach((r) => r.classList.remove('selected'));
-      row.classList.add('selected');
-      loadUserDetail(row.dataset.userId, currentGuildFilter || '');
-    });
-
-    loginForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (!loginUsername.value || !loginPassword.value) {
-        loginErrorEl.textContent = 'Username and password are required.';
-        loginErrorEl.hidden = false;
-        return;
-      }
-      loginErrorEl.hidden = true;
+    const loadStats = async (guildId) => {
+      const status = $("stats-status");
+      const out = $("stats-json");
+      const err = $("stats-error");
+      out.hidden = true; err.hidden = true;
+      status.textContent = "Loading…";
       try {
-        const res = await fetch(AUTH_BASE + '/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ username: loginUsername.value.trim(), password: loginPassword.value })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.error || 'Login failed');
+        const q = guildId ? ("?guildId=" + encodeURIComponent(guildId)) : "";
+        const res = await fetch(API_BASE + "/stats" + q, { credentials: "include" });
+        if (res.status === 401 || res.status === 403) {
+          updateAuthUI(false);
+          throw new Error("Authentication required");
         }
-        setAuthenticated(true, data.username || '');
-        loginPassword.value = '';
-      } catch (error) {
-        loginErrorEl.textContent = error.message || 'Login failed';
-        loginErrorEl.hidden = false;
-        loginPassword.value = '';
-        loginPassword.focus();
+        if (!res.ok) throw new Error("Failed ("+res.status+")");
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+        out.hidden = false;
+        status.textContent = data.generatedAt ? ("Updated " + new Date(data.generatedAt).toLocaleString()) : "Updated";
+      } catch (e) {
+        err.textContent = String(e?.message || e);
+        err.hidden = false;
+        status.textContent = "Failed to load.";
       }
-    });
+    };
 
-    logoutBtn.addEventListener('click', async () => {
-      logoutBtn.disabled = true;
+    const loadUsers = async (guildId) => {
+      const status = $("users-status");
+      const out = $("users-json");
+      const err = $("users-error");
+      out.hidden = true; err.hidden = true;
+      status.textContent = "Loading…";
       try {
-        await fetch(AUTH_BASE + '/logout', { method: 'POST', credentials: 'include' });
-      } catch {
-        // ignore logout errors
+        const q = guildId ? ("?guildId=" + encodeURIComponent(guildId)) : "";
+        const res = await fetch(API_BASE + "/users" + q, { credentials: "include" });
+        if (res.status === 401 || res.status === 403) {
+          updateAuthUI(false);
+          throw new Error("Authentication required");
+        }
+        if (!res.ok) throw new Error("Failed ("+res.status+")");
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+        out.hidden = false;
+        status.textContent = (Array.isArray(data.users) ? data.users.length : 0) + " users";
+      } catch (e) {
+        err.textContent = String(e?.message || e);
+        err.hidden = false;
+        status.textContent = "Failed to load.";
       }
-      logoutBtn.disabled = false;
-      setAuthenticated(false, '');
-    });
+    };
 
-    refreshBtn.addEventListener('click', () => {
-      refreshAll();
-    });
-
-    updateView();
     if (isAuthenticated) {
-      activeTab = 'overview';
-      setActiveTab(activeTab);
-      refreshAll();
+      const refreshBtn = $("refresh-btn");
+      if (refreshBtn) refreshBtn.addEventListener("click", refresh);
+      refresh().catch(()=>{});
+      bindLogout();
     } else {
-      fetchSession();
+      bindLogin();
     }
+  })();
   </script>
 </body>
 </html>`;
-
   }
 }

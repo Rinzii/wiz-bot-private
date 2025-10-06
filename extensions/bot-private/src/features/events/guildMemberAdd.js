@@ -231,6 +231,7 @@ function formatActionTimestamp(entry) {
       return `<t:${seconds}:F> (<t:${seconds}:R>)`;
     }
   }
+  
   return null;
 }
 
@@ -281,6 +282,7 @@ function resolveAlertColor() {
   if (typeof configured === "number" && Number.isInteger(configured) && configured >= 0) {
     return configured;
   }
+
   return DEFAULT_ALERT_COLOR;
 }
 
@@ -291,5 +293,6 @@ function toDate(value) {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
+
   return null;
 }

@@ -1,18 +1,3 @@
-/**
- * LinkAllowService
- * Stores and checks allowed links/patterns per guild.
- *
- * Types supported:
- *  - exact       : exact URL match (normalized)
- *  - host        : host match (e.g., "discord.gg" or "example.com")
- *  - path_prefix : URL path starts with this string (after the host), e.g. "/my/path"
- *  - substring   : URL string contains this substring
- *  - regex       : JS RegExp (string), tested against the full URL
- *  - invite_code : Discord invite code (e.g., "abcdEFG")
- *
- * Mongo collection: link_allow
- * Document: { guildId, type, value, note?, addedBy, createdAt }
- */
 
 import { URL } from "node:url";
 
@@ -45,9 +30,6 @@ function normalizePotentialInvite(urlLike) {
 }
 
 export class LinkAllowService {
-  /**
-   * @param {import('mongodb').Db} db
-   */
   constructor(db) {
     this.col = db.collection("link_allow");
   }
@@ -85,7 +67,6 @@ export class LinkAllowService {
 
     for (const rule of doc) {
       if (rule.type === "invite_code" && inviteNorm) {
-        // Compare codes only
         const code = inviteNorm.split("/").pop();
         if (code?.toLowerCase() === rule.value.toLowerCase()) return true;
       }
@@ -122,7 +103,6 @@ export class LinkAllowService {
     return false;
   }
 
-  // Expose small helpers (used by the event/command)
   static extractUrls(text) {
     return extractUrlsFromText(text || "");
   }

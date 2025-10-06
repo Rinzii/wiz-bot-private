@@ -205,6 +205,7 @@ function applyEnvOverrides(base) {
     if (parsed === undefined) continue;
     setDeep(result, path, parsed);
   }
+
   return result;
 }
 
@@ -248,31 +249,40 @@ function parseColor(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.floor(value));
   }
+
   const str = String(value).trim();
+
   if (!str) return undefined;
+  
   if (str.startsWith("#")) {
     const parsed = Number.parseInt(str.slice(1), 16);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
   if (str.toLowerCase().startsWith("0x")) {
     const parsed = Number.parseInt(str.slice(2), 16);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
   const numeric = Number(str);
   return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : undefined;
 }
 
 function setDeep(target, path, value) {
   if (!path) return;
+
   const keys = path.split(".");
   let cursor = target;
+
   for (let i = 0; i < keys.length - 1; i += 1) {
     const key = keys[i];
     if (!isPlainObject(cursor[key])) {
       cursor[key] = {};
     }
+
     cursor = cursor[key];
   }
+
   cursor[keys[keys.length - 1]] = value;
 }
 
@@ -280,7 +290,9 @@ function deepMerge(base, override) {
   if (Array.isArray(base) && Array.isArray(override)) {
     return [...override];
   }
+
   const result = isPlainObject(base) ? { ...base } : {};
+  
   if (isPlainObject(override)) {
     for (const [key, value] of Object.entries(override)) {
       if (isPlainObject(value)) {
@@ -292,6 +304,7 @@ function deepMerge(base, override) {
       }
     }
   }
+
   return result;
 }
 
@@ -317,5 +330,6 @@ function deepFreeze(value) {
       deepFreeze(child);
     }
   }
+
   return value;
 }
